@@ -51,6 +51,16 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
     },
   })
 
+  const addFiles = useCallback((files: File[]) => {
+    const newUploads = files.map(file => ({
+      file,
+      angleType: 'wide',
+      progress: 0,
+      status: 'pending' as const,
+    }))
+    setUploads(prev => [...prev, ...newUploads])
+  }, [])
+
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -68,23 +78,13 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
 
     const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('video/'))
     addFiles(files)
-  }, [])
+  }, [addFiles])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files)
       addFiles(files)
     }
-  }
-
-  const addFiles = (files: File[]) => {
-    const newUploads = files.map(file => ({
-      file,
-      angleType: 'wide',
-      progress: 0,
-      status: 'pending' as const,
-    }))
-    setUploads(prev => [...prev, ...newUploads])
   }
 
   const updateAngleType = (index: number, angleType: string) => {

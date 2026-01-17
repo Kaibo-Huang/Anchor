@@ -197,7 +197,7 @@ export async function addEventBrands(
   storeId: string,
   productIds: string[],
   setPrimary: boolean = false
-): Promise<{ message: string; associations: any[] }> {
+): Promise<{ message: string; associations: Array<{ id: string; product_id: string; is_primary: boolean }> }> {
   return apiRequest(`/api/events/${eventId}/brands`, {
     method: 'POST',
     body: JSON.stringify({
