@@ -187,54 +187,71 @@ def generate_video_task(self, event_id: str):
                 music_path = os.path.join(tmpdir, "music.mp3")
                 download_file(bucket, key, music_path)
 
-            # Generate Veo ads if Shopify is connected and we have ad slots
+            # Generate Veo ads if brand products are connected and we have ad slots
             generated_ads = None
             ad_slots = timeline.get("ad_slots", [])
-            if event_data.get("shopify_access_token") and ad_slots:
+            if ad_slots:
                 try:
                     from services.veo_service import generate_ads_for_slots
+                    from services.shopify_sync import get_event_brand_products
                     from services.encryption import decrypt
                     import httpx
 
-                    # Fetch products from Shopify (synchronous)
-                    access_token = decrypt(event_data["shopify_access_token"])
-                    shop_url = event_data["shopify_store_url"]
+                    products = []
 
-                    with httpx.Client() as client:
-                        response = client.get(
-                            f"{shop_url}/admin/api/{settings.shopify_api_version}/products.json",
-                            headers={
-                                "X-Shopify-Access-Token": access_token,
-                                "Content-Type": "application/json",
-                            },
-                            params={"limit": 5, "status": "active"},
-                        )
-
-                        if response.status_code == 200:
-                            shopify_products = response.json().get("products", [])
-
-                            # Transform to our format
-                            products = []
-                            for p in shopify_products:
-                                variant = p["variants"][0] if p.get("variants") else {}
-                                image = p["images"][0] if p.get("images") else {}
+                    # Try new model first: get products from event_brand_products
+                    brand_products = get_event_brand_products(event_id)
+                    if brand_products:
+                        for bp in brand_products:
+                            product = bp.get("product")
+                            if product:
                                 products.append({
-                                    "id": str(p["id"]),
-                                    "title": p["title"],
-                                    "description": p.get("body_html", ""),
-                                    "price": variant.get("price", "0.00"),
-                                    "image_url": image.get("src"),
+                                    "id": product["id"],
+                                    "title": product["title"],
+                                    "description": product.get("description", ""),
+                                    "price": str(product.get("price", "0.00")),
+                                    "image_url": product.get("image_url"),
                                 })
+                        print(f"[Worker] Using {len(products)} products from event_brand_products")
 
-                            if products:
-                                # Generate Veo ads for each slot
-                                generated_ads = generate_ads_for_slots(
-                                    products=products,
-                                    ad_slots=ad_slots,
-                                    event_type=event_data["event_type"],
-                                    sponsor_name=event_data.get("sponsor_name"),
-                                )
-                                print(f"[Worker] Generated {len(generated_ads)} Veo ads")
+                    # Fall back to legacy model if no brand products
+                    elif event_data.get("shopify_access_token"):
+                        access_token = decrypt(event_data["shopify_access_token"])
+                        shop_url = event_data["shopify_store_url"]
+
+                        with httpx.Client() as client:
+                            response = client.get(
+                                f"{shop_url}/admin/api/{settings.shopify_api_version}/products.json",
+                                headers={
+                                    "X-Shopify-Access-Token": access_token,
+                                    "Content-Type": "application/json",
+                                },
+                                params={"limit": 5, "status": "active"},
+                            )
+
+                            if response.status_code == 200:
+                                shopify_products = response.json().get("products", [])
+                                for p in shopify_products:
+                                    variant = p["variants"][0] if p.get("variants") else {}
+                                    image = p["images"][0] if p.get("images") else {}
+                                    products.append({
+                                        "id": str(p["id"]),
+                                        "title": p["title"],
+                                        "description": p.get("body_html", ""),
+                                        "price": variant.get("price", "0.00"),
+                                        "image_url": image.get("src"),
+                                    })
+                        print(f"[Worker] Using {len(products)} products from legacy Shopify connection")
+
+                    if products:
+                        # Generate Veo ads for each slot
+                        generated_ads = generate_ads_for_slots(
+                            products=products,
+                            ad_slots=ad_slots,
+                            event_type=event_data["event_type"],
+                            sponsor_name=event_data.get("sponsor_name"),
+                        )
+                        print(f"[Worker] Generated {len(generated_ads)} Veo ads")
                 except Exception as e:
                     print(f"[Worker] Failed to generate Veo ads: {e}")
                     # Continue without ads - not a fatal error
@@ -270,6 +287,33 @@ def generate_video_task(self, event_id: str):
         if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
             raise self.retry(exc=e)
 
+        raise
+
+
+@celery.task(bind=True, max_retries=3, default_retry_delay=30)
+def sync_store_products_task(self, store_id: str):
+    """Sync products from Shopify store to local cache.
+
+    Called after a store installs the app or when manually triggered.
+    Fetches all active products and upserts them into shopify_products table.
+    """
+    from services.shopify_sync import sync_store_products
+
+    try:
+        result = sync_store_products(store_id)
+        return {
+            "status": "success",
+            "store_id": store_id,
+            "products_synced": result["products_synced"],
+        }
+
+    except Exception as e:
+        # Retry on transient errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e)
+
+        # Log and re-raise for permanent errors
+        print(f"[Worker] Failed to sync store {store_id}: {e}")
         raise
 
 

@@ -1,10 +1,9 @@
 """TwelveLabs service for video understanding, search, and embeddings."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from twelvelabs import TwelveLabs
-from twelvelabs.models.task import Task
 
 from config import get_settings
 
@@ -27,8 +26,8 @@ def create_index(index_name: str) -> str:
     """
     client = get_twelvelabs_client()
 
-    # Import here to avoid circular imports at module level
-    from twelvelabs.models import IndexesCreateRequestModelsItem
+    # Import from top-level twelvelabs module
+    from twelvelabs import IndexesCreateRequestModelsItem
 
     index = client.indexes.create(
         index_name=index_name,
@@ -47,7 +46,7 @@ def create_index(index_name: str) -> str:
     return index.id
 
 
-def index_video(index_id: str, video_url: str, wait: bool = True) -> Task:
+def index_video(index_id: str, video_url: str, wait: bool = True) -> Any:
     """Index a video in TwelveLabs for analysis.
 
     Args:

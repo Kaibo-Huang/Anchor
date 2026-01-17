@@ -22,12 +22,13 @@ os.environ.update({
     "SHOPIFY_API_VERSION": "2024-01",
     "TWELVELABS_API_KEY": "test-twelvelabs-key",
     "GOOGLE_API_KEY": "test-google-key",
-    "ENCRYPTION_KEY": "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcw==",  # Base64 encoded 32-byte key
+    "ENCRYPTION_KEY": "owS2jbTMv6SHeGD3p26TcfoFRoNDUETWggBeg_Rjq3c=",  # Valid Fernet key
     "BASE_URL": "http://localhost:8000",
     "FRONTEND_URL": "http://localhost:3000",
 })
 
 from main import app
+from services.supabase_client import get_supabase
 
 
 # Sample data for tests
@@ -43,12 +44,28 @@ def client() -> Generator[TestClient, None, None]:
         yield c
 
 
+def _clear_supabase_cache():
+    """Clear the lru_cache for get_supabase."""
+    get_supabase.cache_clear()
+
+
 @pytest.fixture
 def mock_supabase():
     """Mock Supabase client for database operations."""
-    with patch("services.supabase_client.get_supabase") as mock:
+    _clear_supabase_cache()
+
+    # Patch in all modules that import get_supabase
+    with patch("routers.events.get_supabase") as mock_events, \
+         patch("routers.videos.get_supabase") as mock_videos, \
+         patch("routers.reels.get_supabase") as mock_reels, \
+         patch("routers.shopify.get_supabase") as mock_shopify, \
+         patch("services.supabase_client.get_supabase") as mock_service:
+
         supabase = MagicMock()
-        mock.return_value = supabase
+
+        # Apply mock to all patched locations
+        for mock in [mock_events, mock_videos, mock_reels, mock_shopify, mock_service]:
+            mock.return_value = supabase
 
         # Default successful responses
         supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
@@ -67,9 +84,18 @@ def mock_supabase():
 @pytest.fixture
 def mock_supabase_empty():
     """Mock Supabase client that returns empty results."""
-    with patch("services.supabase_client.get_supabase") as mock:
+    _clear_supabase_cache()
+
+    with patch("routers.events.get_supabase") as mock_events, \
+         patch("routers.videos.get_supabase") as mock_videos, \
+         patch("routers.reels.get_supabase") as mock_reels, \
+         patch("routers.shopify.get_supabase") as mock_shopify, \
+         patch("services.supabase_client.get_supabase") as mock_service:
+
         supabase = MagicMock()
-        mock.return_value = supabase
+
+        for mock in [mock_events, mock_videos, mock_reels, mock_shopify, mock_service]:
+            mock.return_value = supabase
 
         supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
         supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[])
@@ -80,9 +106,11 @@ def mock_supabase_empty():
 @pytest.fixture
 def mock_redis():
     """Mock Redis client."""
-    with patch("services.redis_client.get_redis") as mock:
+    with patch("routers.shopify.get_redis") as mock_shopify, \
+         patch("services.redis_client.get_redis") as mock_service:
         redis = MagicMock()
-        mock.return_value = redis
+        mock_shopify.return_value = redis
+        mock_service.return_value = redis
 
         redis.get.return_value = SAMPLE_EVENT_ID.encode()
         redis.setex.return_value = True
@@ -94,9 +122,11 @@ def mock_redis():
 @pytest.fixture
 def mock_s3():
     """Mock S3 operations."""
-    with patch("services.s3_client.generate_presigned_upload_url") as mock:
-        mock.return_value = "https://test-bucket.s3.amazonaws.com/presigned-url"
-        yield mock
+    with patch("routers.videos.generate_presigned_upload_url") as mock_videos, \
+         patch("services.s3_client.generate_presigned_upload_url") as mock_service:
+        mock_videos.return_value = "https://test-bucket.s3.amazonaws.com/presigned-url"
+        mock_service.return_value = "https://test-bucket.s3.amazonaws.com/presigned-url"
+        yield mock_videos
 
 
 @pytest.fixture
@@ -196,4 +226,53 @@ def sample_shopify_products():
                 "images": [{"src": "https://cdn.shopify.com/test.jpg"}],
             }
         ]
+    }
+
+
+SAMPLE_STORE_ID = str(uuid4())
+SAMPLE_PRODUCT_ID = str(uuid4())
+
+
+@pytest.fixture
+def sample_store():
+    """Sample Shopify store data."""
+    return {
+        "id": SAMPLE_STORE_ID,
+        "shop_domain": "test-brand.myshopify.com",
+        "shop_name": "Test Brand",
+        "status": "active",
+        "installed_at": "2024-01-15T10:00:00Z",
+        "last_sync_at": "2024-01-15T10:05:00Z",
+        "scopes": "read_products,read_product_listings,read_files",
+    }
+
+
+@pytest.fixture
+def sample_cached_product():
+    """Sample cached Shopify product data."""
+    return {
+        "id": SAMPLE_PRODUCT_ID,
+        "store_id": SAMPLE_STORE_ID,
+        "shopify_product_id": "123456",
+        "title": "Test Product",
+        "description": "A great product",
+        "price": 29.99,
+        "currency": "USD",
+        "image_url": "https://cdn.shopify.com/test.jpg",
+        "checkout_url": "https://test-brand.myshopify.com/cart/789:1",
+        "status": "active",
+        "synced_at": "2024-01-15T10:05:00Z",
+    }
+
+
+@pytest.fixture
+def sample_event_brand_product():
+    """Sample event-brand product association."""
+    return {
+        "id": str(uuid4()),
+        "event_id": SAMPLE_EVENT_ID,
+        "store_id": SAMPLE_STORE_ID,
+        "product_id": SAMPLE_PRODUCT_ID,
+        "display_order": 0,
+        "is_primary": True,
     }

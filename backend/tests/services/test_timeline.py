@@ -10,24 +10,26 @@ class TestScoreAngleAtTime:
     """Test angle scoring function."""
 
     def test_score_wide_angle_base(self):
-        """Test that wide angle gets base score of 50."""
+        """Test that wide angle gets base + profile score."""
         from services.timeline import score_angle_at_time
 
         video = {"angle_type": "wide", "analysis_data": {}}
         profile = {"default": "wide"}
 
         score = score_angle_at_time(video, 0, profile, None)
-        assert score >= 50  # Base 50 + 10 for matching default
+        # Base score: 50 * 0.25 = 12.5, profile match: 25, total: 37.5
+        assert score == 37.5
 
     def test_score_closeup_angle(self):
-        """Test closeup angle scoring."""
+        """Test closeup angle scoring without profile match."""
         from services.timeline import score_angle_at_time
 
         video = {"angle_type": "closeup", "analysis_data": {}}
         profile = {"default": "wide"}
 
         score = score_angle_at_time(video, 0, profile, None)
-        assert score == 40  # Base score for closeup
+        # Base score: 40 * 0.25 = 10, no profile match
+        assert score == 10
 
     def test_score_crowd_angle(self):
         """Test crowd angle scoring."""
@@ -37,7 +39,8 @@ class TestScoreAngleAtTime:
         profile = {"default": "wide"}
 
         score = score_angle_at_time(video, 0, profile, None)
-        assert score == 30
+        # Base score: 30 * 0.25 = 7.5, no profile match
+        assert score == 7.5
 
     def test_score_default_angle_bonus(self):
         """Test that default angle gets bonus."""
@@ -50,8 +53,11 @@ class TestScoreAngleAtTime:
         wide_score = score_angle_at_time(wide_video, 0, profile, None)
         closeup_score = score_angle_at_time(closeup_video, 0, profile, None)
 
-        # Closeup should get +10 bonus for being default
+        # Wide: 50 * 0.25 = 12.5, no profile match
+        # Closeup: 40 * 0.25 = 10 + 25 (profile match) = 35
         assert closeup_score > wide_score
+        assert closeup_score == 35
+        assert wide_score == 12.5
 
     def test_score_with_embeddings(self):
         """Test that embeddings boost score."""
@@ -61,15 +67,16 @@ class TestScoreAngleAtTime:
             "angle_type": "wide",
             "analysis_data": {
                 "embeddings": [
-                    {"start_time": 0, "end_time": 5, "data": [0.1, 0.2]}
+                    {"start_time": 0, "end_time": 5, "embedding": [0.1, 0.2]}
                 ]
             }
         }
         profile = {"default": "wide"}
 
+        # Without scene_context, embeddings give base credit of 15
         score = score_angle_at_time(video, 2000, profile, None)  # 2 seconds
-        # Should get base + default bonus + embedding bonus
-        assert score >= 65
+        # base: 12.5 + profile: 25 + embedding base: 15 = 52.5
+        assert score == 52.5
 
     def test_score_max_100(self):
         """Test that score is capped at 100."""
@@ -78,7 +85,7 @@ class TestScoreAngleAtTime:
         video = {
             "angle_type": "wide",
             "analysis_data": {
-                "embeddings": [{"start_time": 0, "end_time": 10, "data": []}]
+                "embeddings": [{"start_time": 0, "end_time": 10, "embedding": [0.1, 0.2]}]
             }
         }
         profile = {"default": "wide"}

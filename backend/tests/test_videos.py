@@ -184,7 +184,7 @@ class TestMusicAnalyze:
             data=[sample_event_with_music]
         )
 
-        with patch("routers.videos.analyze_music_task", mock_celery_tasks["analyze_music"]):
+        with patch("worker.analyze_music_task", mock_celery_tasks["analyze_music"]):
             response = client.post(f"/api/events/{sample_event['id']}/music/analyze")
 
         assert response.status_code == 200

@@ -58,18 +58,20 @@ class TestEventWorkflow:
             MagicMock(data=[{"id": video_id, "status": "uploaded"}]),  # Get videos
         ]
 
-        with patch("routers.events.analyze_videos_task", mock_celery_tasks["analyze_videos"]):
+        with patch("worker.analyze_videos_task", mock_celery_tasks["analyze_videos"]):
             response = client.post(f"/api/events/{event_id}/analyze")
 
         assert response.status_code == 200
         assert response.json()["message"] == "Analysis started"
 
         # Step 5: Generate final video (after analysis completes)
+        # Reset side_effect before setting new return_value
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.side_effect = None
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[{"id": event_id, "status": "analyzed"}]
         )
 
-        with patch("routers.events.generate_video_task", mock_celery_tasks["generate_video"]):
+        with patch("worker.generate_video_task", mock_celery_tasks["generate_video"]):
             response = client.post(f"/api/events/{event_id}/generate")
 
         assert response.status_code == 200
@@ -93,7 +95,7 @@ class TestHighlightReelWorkflow:
         assert response.json()["status"] == "analyzed"
 
         # Step 2: Generate highlight reel
-        with patch("routers.reels.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
+        with patch("worker.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
             response = client.post(
                 f"/api/events/{event_id}/reels/generate",
                 json={
@@ -254,7 +256,7 @@ class TestMusicIntegrationWorkflow:
             }]
         )
 
-        with patch("routers.videos.analyze_music_task", mock_celery_tasks["analyze_music"]):
+        with patch("worker.analyze_music_task", mock_celery_tasks["analyze_music"]):
             response = client.post(f"/api/events/{event_id}/music/analyze")
 
         assert response.status_code == 200

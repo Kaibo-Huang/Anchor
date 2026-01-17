@@ -16,7 +16,7 @@ class TestGenerateReel:
             data=[sample_event_analyzed]
         )
 
-        with patch("routers.reels.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
+        with patch("worker.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
             response = client.post(
                 f"/api/events/{sample_event_analyzed['id']}/reels/generate",
                 json={
@@ -38,7 +38,7 @@ class TestGenerateReel:
             data=[sample_event_analyzed]
         )
 
-        with patch("routers.reels.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
+        with patch("worker.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
             response = client.post(
                 f"/api/events/{sample_event_analyzed['id']}/reels/generate",
                 json={
@@ -57,7 +57,7 @@ class TestGenerateReel:
             data=[sample_event_analyzed]
         )
 
-        with patch("routers.reels.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
+        with patch("worker.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
             response = client.post(
                 f"/api/events/{sample_event_analyzed['id']}/reels/generate",
                 json={
@@ -120,7 +120,7 @@ class TestGenerateReel:
         ]
 
         for query in queries:
-            with patch("routers.reels.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
+            with patch("worker.generate_highlight_reel_task", mock_celery_tasks["generate_highlight_reel"]):
                 response = client.post(
                     f"/api/events/{sample_event_analyzed['id']}/reels/generate",
                     json={"query": query, "vibe": "high_energy"},

@@ -115,7 +115,7 @@ class TestAnalyzeEvent:
             MagicMock(data=[sample_video]),  # Videos query
         ]
 
-        with patch("routers.events.analyze_videos_task", mock_celery_tasks["analyze_videos"]):
+        with patch("worker.analyze_videos_task", mock_celery_tasks["analyze_videos"]):
             response = client.post(f"/api/events/{sample_event['id']}/analyze")
 
         assert response.status_code == 200
@@ -150,7 +150,7 @@ class TestGenerateVideo:
             data=[sample_event_analyzed]
         )
 
-        with patch("routers.events.generate_video_task", mock_celery_tasks["generate_video"]):
+        with patch("worker.generate_video_task", mock_celery_tasks["generate_video"]):
             response = client.post(f"/api/events/{sample_event_analyzed['id']}/generate")
 
         assert response.status_code == 200
