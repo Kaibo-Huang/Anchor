@@ -18,11 +18,13 @@ Pkg Mgrs:  bun (frontend), uv (backend)
 ## Video Tools
 | Tool | Purpose |
 |------|---------|
-| FFmpeg | Cut, concat, crop, zoom, overlay, transitions, audio mix (FAST) |
-| MoviePy | Complex animations, smooth zoom easing (Python, slower) |
-| TwelveLabs | UNDERSTAND video: scene detection, objects, actions, faces, audio |
+| FFmpeg | Cut, concat, crop, zoom, overlay, transitions, audio mix (FAST - PRIMARY TOOL) |
+| ffmpeg-python | Construct FFmpeg commands in Python, execute binary (NOT frame loops) |
+| TwelveLabs | UNDERSTAND video: scene detection, objects, actions, faces, audio + embeddings |
 | Google Veo | GENERATE new video from text/images (ads, NOT for editing footage) |
 | librosa | Audio fingerprinting for multi-angle sync |
+
+**CRITICAL: Use FFmpeg for 95% of video tasks. Never process frames in Python loops - it will timeout on 4K video.**
 
 ## FFmpeg Quick Reference
 ```bash
@@ -34,14 +36,28 @@ ffmpeg -i input.mp4 -vf "crop=iw/2:ih/2:iw/4:ih/4,scale=1920:1080" output.mp4
 ffmpeg -i video.mp4 -i banner.png -filter_complex "overlay=10:H-200:enable='between(t,5,10)'" output.mp4
 # Crossfade (0.5s)
 ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex "xfade=transition=fade:duration=0.5:offset=4.5" output.mp4
-# Ken Burns zoom
+# Ken Burns zoom (smooth easing with zoompan)
 ffmpeg -i input.mp4 -vf "zoompan=z='min(zoom+0.001,1.5)':d=90:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'" output.mp4
+# Advanced zoom with ease-in/ease-out
+ffmpeg -i input.mp4 -vf "zoompan=z='if(lte(on,9),1+(0.5/9)*on,if(lte(on,60),1.5,1.5-(0.5/9)*(on-60)))':d=70:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'" output.mp4
 ```
 
-## MoviePy Animated Zoom
+## ffmpeg-python Usage (Build Commands, Not Frame Processing)
 ```python
-clip = clip.resize(lambda t: 1 + 0.3 * min(t / 0.3, 1))  # 1x→1.3x over 0.3s
-clip = clip.crop(x_center=960, y_center=540, width=1920, height=1080)
+import ffmpeg
+
+# CORRECT: Build and execute FFmpeg command
+(
+    ffmpeg
+    .input('input.mp4')
+    .filter('zoompan', z='min(zoom+0.001,1.5)', d=90, x='iw/2-(iw/zoom/2)', y='ih/2-(ih/zoom/2)')
+    .output('output.mp4')
+    .run()
+)
+
+# WRONG: Never do frame-by-frame processing in Python
+# for frame in video:  # TIMEOUT on 4K video!
+#     process_frame(frame)
 ```
 
 ## Commands
@@ -72,13 +88,75 @@ Upload 2-4 videos → S3 → Audio sync → TwelveLabs analysis
 1. **Rough align:** Device metadata timestamps (within ~5s)
 2. **Fine-tune:** librosa audio correlation via onset_strength + scipy.signal.correlate (<100ms accuracy)
 
-### TwelveLabs Analysis
+### TwelveLabs Analysis (with Embeddings)
 ```python
 client = TwelveLabs(api_key=KEY)
-index = client.index.create(name=f"event_{id}", engines=[{"name": "marengo2.7", "options": ["visual", "audio"]}])
+
+# Create index with embedding engine for style matching
+index = client.index.create(
+    name=f"event_{id}",
+    engines=[
+        {"name": "marengo2.7", "options": ["visual", "audio"]},
+        {"name": "pegasus1.2", "options": ["visual"]}  # For embeddings
+    ]
+)
+
 task = client.task.create(index_id=index.id, url=s3_url)
 # Returns: scene classification, objects, audio events, action_intensity (1-10)
+
+# USE EMBEDDINGS for style/vibe matching (not just keyword search)
+# Example: Match "High Energy" segments
+def find_high_energy_segments(index_id):
+    """
+    Use vector embeddings to find segments matching a vibe/identity.
+    Better than keyword search for subjective qualities like "energy" or "emotion".
+    """
+    # Create embedding vector for "High Energy" reference
+    high_energy_query = "fast movement, intense action, crowd cheering, high energy"
+
+    # Use semantic search with embeddings
+    search_results = client.search.query(
+        index_id=index_id,
+        query_text=high_energy_query,
+        search_options=["visual", "audio"],
+        operator="or"
+    )
+
+    # OR: Use embeddings endpoint directly for vector similarity
+    embeddings = client.embed.task.create(
+        engine_name="marengo2.7",
+        video_url=s3_url
+    )
+
+    # Compare embeddings to "identity" vectors (High Energy, Calm, Emotional, etc.)
+    # This maps the VIDEO IDENTITY to user preference
+    return embeddings
+
+# Use embeddings to match video style to user's desired "Identity" theme
+def match_video_identity_to_preference(segment_embeddings, identity_preference):
+    """
+    Identity theme: Compare video segment embeddings to identity anchor vectors.
+    Example: User selects "High Energy" → find segments with similar vector.
+    """
+    identity_anchors = {
+        "high_energy": [0.8, 0.2, ...],  # Pre-computed or reference embedding
+        "emotional": [0.3, 0.9, ...],
+        "calm": [0.1, 0.1, ...]
+    }
+
+    anchor_vector = identity_anchors[identity_preference]
+
+    # Compute cosine similarity between segment and anchor
+    from scipy.spatial.distance import cosine
+    scores = []
+    for seg_embedding in segment_embeddings:
+        similarity = 1 - cosine(seg_embedding, anchor_vector)
+        scores.append(similarity)
+
+    return scores  # Higher score = better identity match
 ```
+
+**WHY EMBEDDINGS:** Maps the "Identity" of video style. If user selects "High Energy" vibe, compare vector embeddings of segments to a "High Energy" anchor, rather than just keyword searching for "running." More accurate for subjective qualities.
 
 ### Chunking Strategy
 - **Speech present:** Use transcription sentence boundaries (natural breakpoints)
@@ -108,17 +186,90 @@ Returns JSON: `[{"timestamp_ms": 0, "title": "Start", "type": "section"}, ...]`
 
 **Goal:** Ken Burns effect on key moments (goals, name calls, solos).
 
+**CRITICAL: Use FFmpeg zoompan filter exclusively. Never process frames in Python - will timeout on 4K.**
+
 ### Triggers
 - action_intensity > 8, audio events ("cheer", "goal"), user timestamps
 - Only zoom wide/medium shots (never closeups—resolution loss)
 - Max 1 zoom per 10s
 
-### Zoom Calculation
+### Zoom Implementation (FFmpeg Only)
 ```python
-zoom = 2.5 if importance >= 0.85 else 1.8  # Based on confidence
-cx, cy = bbox center; crop to frame_size/zoom centered on (cx, cy)
-# Ease-in 0.3s → hold 2-5s → ease-out 0.3s
+import ffmpeg
+from config import VideoConfig
+
+def apply_zoom_to_moment(input_path, output_path, zoom_start_sec, zoom_duration_sec, importance):
+    """
+    Apply Ken Burns zoom using FFmpeg zoompan filter.
+    NEVER use Python frame loops - use FFmpeg binary for speed.
+    """
+    # Determine zoom factor
+    zoom_factor = VideoConfig.ZOOM_FACTOR_HIGH if importance >= 0.85 else VideoConfig.ZOOM_FACTOR_MED
+
+    # Calculate frame counts (assuming 30fps)
+    fps = 30
+    ease_in_frames = int(0.3 * fps)  # 0.3s ease-in
+    hold_frames = int((zoom_duration_sec - 0.6) * fps)  # Hold time
+    ease_out_frames = int(0.3 * fps)  # 0.3s ease-out
+    total_frames = ease_in_frames + hold_frames + ease_out_frames
+
+    # FFmpeg zoompan expression with ease-in, hold, ease-out
+    # on=frame number, d=duration in frames
+    zoom_expr = (
+        f"if(lte(on,{ease_in_frames}),"
+        f"1+({zoom_factor - 1}/{ease_in_frames})*on,"  # Ease in
+        f"if(lte(on,{ease_in_frames + hold_frames}),"
+        f"{zoom_factor},"  # Hold
+        f"{zoom_factor}-({zoom_factor - 1}/{ease_out_frames})*(on-{ease_in_frames + hold_frames})))"  # Ease out
+    )
+
+    # Build FFmpeg command (NO PYTHON FRAME PROCESSING)
+    (
+        ffmpeg
+        .input(input_path, ss=zoom_start_sec, t=zoom_duration_sec)
+        .filter('zoompan',
+                z=zoom_expr,
+                d=total_frames,
+                x='iw/2-(iw/zoom/2)',  # Center x
+                y='ih/2-(ih/zoom/2)',  # Center y
+                s='1920x1080')
+        .output(output_path, vcodec='libx264', crf=18)
+        .overwrite_output()
+        .run()
+    )
+
+def generate_zoom_segments(timeline, analysis_data):
+    """
+    Identify moments for zoom based on TwelveLabs analysis.
+    Use embeddings to find high-intensity moments matching desired vibe.
+    """
+    zoom_moments = []
+
+    for segment in timeline:
+        # Use TwelveLabs action_intensity
+        if segment.get('action_intensity', 0) > VideoConfig.ZOOM_MIN_ACTION:
+            # Check shot type (only zoom wide/medium shots)
+            shot_type = segment.get('shot_type', 'unknown')
+            if shot_type in ['wide', 'medium']:
+                zoom_moments.append({
+                    'start_sec': segment['start_sec'],
+                    'duration_sec': min(segment['duration_sec'], 5),  # Max 5s zoom
+                    'importance': segment['action_intensity'] / 10,  # Normalize to 0-1
+                    'bbox_center': segment.get('primary_object_bbox', (0.5, 0.5))  # For targeted zoom
+                })
+
+    # Enforce spacing constraint (max 1 per 10s)
+    spaced_moments = []
+    last_zoom_time = -999
+    for moment in sorted(zoom_moments, key=lambda m: m['importance'], reverse=True):
+        if moment['start_sec'] - last_zoom_time >= VideoConfig.ZOOM_MIN_SPACING_SEC:
+            spaced_moments.append(moment)
+            last_zoom_time = moment['start_sec']
+
+    return spaced_moments
 ```
+
+**Performance Note:** FFmpeg zoompan processes 4K video in real-time. Python frame loops would take 100x longer.
 
 ---
 
@@ -508,30 +659,347 @@ TEMPLATES = {
 
 ---
 
-## FEATURE 4: On-Demand Highlight Reels (Stretch)
+## FEATURE 4: On-Demand Highlight Reels (CORE IDENTITY FEATURE)
 
-**Goal:** User requests custom highlight reel with natural language query.
+**Goal:** Users create personalized highlight reels about THEMSELVES or specific people using natural language.
 
-**Examples:** "player 23", "guy in yellow pants", "the goalie", "person who scored first"
+**Identity Theme Connection:** This is the STRONGEST identity feature - users search for "me," "my best moments," "when I scored" to find THEIR identity in the footage. It's literally about finding yourself.
+
+**Examples:**
+- "me" / "show me" / "my best moments"
+- "player 23" / "number 23"
+- "guy in yellow pants" / "person in red jersey"
+- "the goalie" / "the person who scored first"
+- "me celebrating" / "me scoring"
+- "emotional moments with me"
 
 ### Flow
-1. **User submits query** via API/UI
-2. **TwelveLabs natural language search** → finds matching moments
-3. **Filter and rank** moments by importance/confidence
-4. **Build 30s timeline** from top moments
-5. **Render with FFmpeg** → add title card, concatenate clips with crossfades
-6. **Return S3 URL** instantly
+1. **User submits query + vibe preference** via API/UI
+2. **TwelveLabs natural language search with embeddings** → finds matching moments
+3. **Embedding-based ranking** by vibe (High Energy, Emotional, Calm) + confidence
+4. **Build 30s timeline** from top moments with music beat-sync
+5. **Render with FFmpeg** → add title card, concatenate clips with crossfades, add user's music
+6. **Return S3 URL** instantly (<10 seconds)
 
+### Implementation with Embeddings
 ```python
-# API call
-POST /api/events/:id/reels/generate
-Body: { "query": "player 23", "duration": 30 }
+from scipy.spatial.distance import cosine
+import ffmpeg
 
-# Returns
-{ "reel_url": "https://s3.../reel.mp4", "moments_count": 8 }
+# API endpoint
+@router.post("/api/events/{event_id}/reels/generate")
+async def generate_personal_highlight_reel(
+    event_id: str,
+    query: str,  # e.g., "me", "player 23", "guy in yellow pants"
+    vibe: str = "high_energy",  # "high_energy", "emotional", "calm"
+    duration: int = 30,
+    include_music: bool = True
+):
+    """
+    Generate personalized highlight reel using natural language + embeddings.
+    IDENTITY FEATURE: Find "me" in the video based on query.
+    """
+    event = await get_event(event_id)
+
+    # 1. TwelveLabs natural language search
+    search_results = client.search.query(
+        index_id=event.twelvelabs_index_id,
+        query_text=query,
+        search_options=["visual", "conversation"],
+        operator="or",
+        page_limit=20  # Get top 20 candidate moments
+    )
+
+    # 2. Get embeddings for candidate moments
+    candidate_embeddings = []
+    for result in search_results.data:
+        embedding = await get_segment_embedding(
+            event.twelvelabs_index_id,
+            result.video_id,
+            result.start,
+            result.end
+        )
+        candidate_embeddings.append({
+            "video_id": result.video_id,
+            "start": result.start,
+            "end": result.end,
+            "confidence": result.confidence,
+            "embedding": embedding
+        })
+
+    # 3. Rank by embedding similarity to desired vibe
+    identity_anchors = {
+        "high_energy": get_identity_vector("high_energy"),
+        "emotional": get_identity_vector("emotional"),
+        "calm": get_identity_vector("calm")
+    }
+
+    vibe_vector = identity_anchors[vibe]
+
+    scored_moments = []
+    for moment in candidate_embeddings:
+        # Combine text search confidence + embedding similarity
+        text_score = moment["confidence"]
+        vibe_score = 1 - cosine(moment["embedding"], vibe_vector)
+
+        # Weighted combination: 60% vibe match, 40% text match
+        final_score = 0.6 * vibe_score + 0.4 * text_score
+
+        scored_moments.append({
+            **moment,
+            "final_score": final_score,
+            "vibe_score": vibe_score
+        })
+
+    # 4. Select top moments to fill duration
+    top_moments = sorted(scored_moments, key=lambda m: m["final_score"], reverse=True)
+
+    selected_clips = []
+    total_duration = 0
+    for moment in top_moments:
+        clip_duration = moment["end"] - moment["start"]
+        if total_duration + clip_duration <= duration:
+            selected_clips.append(moment)
+            total_duration += clip_duration
+        if total_duration >= duration:
+            break
+
+    # 5. Build FFmpeg concat filter
+    reel_id = generate_reel_id()
+    output_path = f"/tmp/reel_{reel_id}.mp4"
+
+    # Download clips from S3
+    clip_paths = []
+    for i, clip in enumerate(selected_clips):
+        clip_path = f"/tmp/clip_{i}.mp4"
+        await download_clip_segment(
+            event.videos[clip["video_id"]].url,
+            clip["start"],
+            clip["end"],
+            clip_path
+        )
+        clip_paths.append(clip_path)
+
+    # 6. Render with crossfades and music
+    await render_highlight_reel(
+        clip_paths,
+        output_path,
+        title=f"{query.title()} - Highlight Reel",
+        music_path=event.music_url if include_music else None,
+        vibe=vibe
+    )
+
+    # 7. Upload to S3
+    reel_url = await upload_to_s3(output_path, f"reels/{reel_id}.mp4")
+
+    # 8. Save to database
+    await create_custom_reel(
+        event_id=event_id,
+        query=query,
+        vibe=vibe,
+        output_url=reel_url,
+        moments=selected_clips,
+        duration_sec=total_duration
+    )
+
+    return {
+        "reel_url": reel_url,
+        "moments_count": len(selected_clips),
+        "total_duration": total_duration,
+        "vibe": vibe,
+        "processing_time_ms": "< 10000"  # Instant results
+    }
+
+
+async def render_highlight_reel(
+    clip_paths: list[str],
+    output_path: str,
+    title: str,
+    music_path: str | None,
+    vibe: str
+):
+    """
+    Render highlight reel with crossfades and optional music.
+    Uses FFmpeg exclusively for speed.
+    """
+    # Create title card (2 seconds)
+    title_card_path = await generate_title_card(title, vibe)
+
+    # Build concat with crossfades
+    inputs = [ffmpeg.input(title_card_path)]
+    inputs.extend([ffmpeg.input(path) for path in clip_paths])
+
+    # Apply crossfade transitions (0.5s each)
+    video = inputs[0]
+    for i in range(1, len(inputs)):
+        video = ffmpeg.filter([video, inputs[i]], 'xfade', transition='fade', duration=0.5)
+
+    # Add music if provided
+    if music_path:
+        music = ffmpeg.input(music_path)
+        audio = ffmpeg.filter([music, video], 'amix', inputs=2, duration='shortest')
+        output = ffmpeg.output(video, audio, output_path, vcodec='libx264', acodec='aac')
+    else:
+        output = ffmpeg.output(video, output_path, vcodec='libx264', acodec='aac')
+
+    ffmpeg.run(output, overwrite_output=True)
+
+
+async def generate_title_card(title: str, vibe: str):
+    """Generate title card with vibe-based styling."""
+    vibe_styles = {
+        "high_energy": {"bg_color": "#FF5722", "font_color": "white", "animation": "zoom"},
+        "emotional": {"bg_color": "#3F51B5", "font_color": "white", "animation": "fade"},
+        "calm": {"bg_color": "#4CAF50", "font_color": "white", "animation": "slide"}
+    }
+
+    style = vibe_styles[vibe]
+
+    # Use FFmpeg to generate title card
+    output_path = f"/tmp/title_{hash(title)}.mp4"
+    (
+        ffmpeg
+        .input('color=c={}:s=1920x1080:d=2'.format(style["bg_color"]), f='lavfi')
+        .drawtext(
+            text=title,
+            fontsize=72,
+            fontcolor=style["font_color"],
+            x='(w-text_w)/2',
+            y='(h-text_h)/2'
+        )
+        .output(output_path, vcodec='libx264', pix_fmt='yuv420p')
+        .overwrite_output()
+        .run()
+    )
+
+    return output_path
 ```
 
-**Benefits:** On-demand (no batch processing), handles any natural language query, instant results using existing TwelveLabs index.
+### Frontend UI - Identity-Focused
+```tsx
+// frontend/components/PersonalReelGenerator.tsx
+export function PersonalReelGenerator({ eventId }: { eventId: string }) {
+  const [query, setQuery] = useState("")
+  const [vibe, setVibe] = useState<"high_energy" | "emotional" | "calm">("high_energy")
+  const { mutate: generateReel, isLoading } = useMutation(api.generateReel)
+
+  const examples = [
+    { query: "me", vibe: "high_energy", label: "My Best Moments" },
+    { query: "me celebrating", vibe: "emotional", label: "My Celebrations" },
+    { query: "me scoring", vibe: "high_energy", label: "My Goals" },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Create Your Highlight Reel</CardTitle>
+        <CardDescription>
+          Find yourself in the video with natural language - "me", "my best moments", "when I scored"
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {/* Natural Language Input */}
+          <div>
+            <Label>What do you want to see?</Label>
+            <Input
+              placeholder='Try: "me", "my best moments", "player 23"'
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+
+          {/* Vibe Selection */}
+          <div>
+            <Label>Vibe / Identity</Label>
+            <RadioGroup value={vibe} onValueChange={setVibe}>
+              <div className="flex gap-4">
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="high_energy" id="high_energy" />
+                  <Label htmlFor="high_energy">High Energy ⚡</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="emotional" id="emotional" />
+                  <Label htmlFor="emotional">Emotional 💙</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="calm" id="calm" />
+                  <Label htmlFor="calm">Calm 🌊</Label>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+
+          {/* Quick Examples */}
+          <div>
+            <Label>Quick Examples</Label>
+            <div className="flex gap-2 flex-wrap">
+              {examples.map((ex) => (
+                <Button
+                  key={ex.query}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setQuery(ex.query)
+                    setVibe(ex.vibe as any)
+                  }}
+                >
+                  {ex.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <Button
+            onClick={() => generateReel({ eventId, query, vibe })}
+            disabled={!query || isLoading}
+            className="w-full"
+          >
+            {isLoading ? "Generating..." : "Generate My Reel"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+```
+
+### API Endpoints
+```
+POST /api/events/:id/reels/generate
+Body: {
+  "query": "me",
+  "vibe": "high_energy",
+  "duration": 30,
+  "include_music": true
+}
+
+Returns: {
+  "reel_url": "https://s3.../reel.mp4",
+  "moments_count": 8,
+  "total_duration": 28.5,
+  "vibe": "high_energy",
+  "processing_time_ms": 8234
+}
+
+GET /api/events/:id/reels
+Returns: List of previously generated reels
+```
+
+### Benefits
+- **STRONGEST Identity Feature:** Users literally search for "me" to find themselves
+- **Instant Results:** <10s generation using existing TwelveLabs index
+- **On-Demand:** No batch processing, no waiting
+- **Embedding-Powered:** Matches vibe preference (High Energy, Emotional, Calm)
+- **Demo Impact:** Live queries during presentation show real-time personalization
+- **Natural Language:** "me celebrating," "my best moments" - intuitive for users
+- **Music Integration:** Automatically adds user's personal music track
+
+### Why This is Core to Identity Theme
+1. **Personal Discovery:** Finding YOURSELF in multi-angle footage
+2. **Self-Expression:** Choose vibe that matches YOUR identity
+3. **Instant Gratification:** See YOUR moments instantly
+4. **Shareable:** Download and share YOUR highlight reel on social media
 
 ---
 
@@ -625,8 +1093,10 @@ NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, NEXT_PUBLIC_API_URL, NE
 ```
 
 ## Dependencies
-**Backend:** fastapi, uvicorn, celery[redis], twelvelabs, google-genai, ffmpeg-python, moviepy, librosa, scipy, supabase, boto3, httpx, cryptography
+**Backend:** fastapi, uvicorn, celery[redis], twelvelabs, google-genai, ffmpeg-python (command builder ONLY), librosa, scipy, supabase, boto3, httpx, cryptography, numpy
 **Frontend:** next 14.x, react 18.x, @tanstack/react-query, @supabase/supabase-js, video.js
+
+**Note:** MoviePy removed - use FFmpeg exclusively for performance. ffmpeg-python only used to build commands, not process frames.
 
 ## File Structure
 ```
@@ -875,13 +1345,15 @@ async def integrate_personal_music(event_id, video_path, music_url):
     return output
 ```
 
-## Processing Pipeline
+## Processing Pipeline (Identity-First)
+
+### Core Pipeline (Master Video)
 1. Sync audio (metadata rough → fingerprint fine)
-2. TwelveLabs analysis (parallel)
-3. **Analyze user's music track** (beats, intensity, intro/outro)
-4. Generate angle-switching timeline
+2. **TwelveLabs analysis with embeddings** (Marengo 2.7 + Pegasus 1.2) → enables all features
+3. **Analyze user's music track** (beats, intensity, intro/outro) - optional
+4. Generate angle-switching timeline with embedding-based scoring
 5. **Align cuts to music beats** (optional, configurable)
-6. Identify zoom moments
+6. Identify zoom moments using embeddings + action intensity
 7. Find ad slots (multi-factor scoring) + identify transition points
 8. Generate Veo product videos (motion-matched) + color-grade to match footage
 9. Insert product videos with seamless transitions (native replacement)
@@ -890,24 +1362,45 @@ async def integrate_personal_music(event_id, video_path, music_url):
 12. **Mix personal music with event audio** (ducking, beat-sync, fades)
 13. FFmpeg render → S3
 
+### On-Demand Pipeline (Personal Highlight Reels - FAST)
+1. **User submits query** ("me", "my best moments", "player 23") + vibe preference
+2. **TwelveLabs search** → candidate moments from existing index
+3. **Embedding ranking** → score moments by vibe similarity (High Energy, Emotional, Calm)
+4. **Select top clips** → fill requested duration (default 30s)
+5. **FFmpeg render** → concat with crossfades, add title card, mix music
+6. **S3 upload** → instant URL (<10s total)
+
+**Key Difference:** On-demand reels use EXISTING TwelveLabs index → no re-analysis → instant results. This is why Feature 4 is high priority - it's fast to implement and has huge demo impact.
+
 ## Docker (Post-Hackathon)
 Services: frontend (Next.js), backend (FastAPI), celery (workers), redis, postgres
 One-command: `docker-compose up --build`
 
 ---
 
-## Build Priority
+## Build Priority (IDENTITY-FIRST)
 ```
-Hours 0-4:   Setup (repos, Supabase, S3, API keys)
-Hours 4-12:  Feature 1 (multi-angle switching)
-Hours 12-20: Feature 2 (auto-zoom)
-Hours 20-26: Feature 5 (personal music integration - IDENTITY THEME)
-Hours 26-32: Feature 3 (Native ad integration: Veo + seamless transitions)
-Hours 32-36: Polish, demo, pitch
+Hours 0-4:   Setup (repos, Supabase, S3, API keys, TwelveLabs embeddings)
+Hours 4-12:  Feature 1 (multi-angle switching with embedding-based scoring)
+Hours 12-18: Feature 4 (On-Demand Highlight Reels - CORE IDENTITY FEATURE)
+Hours 18-24: Feature 5 (personal music integration - IDENTITY THEME)
+Hours 24-28: Feature 2 (auto-zoom with FFmpeg)
+Hours 28-34: Feature 3 (Native ad integration: Veo + seamless transitions)
+Hours 34-36: Polish, demo, pitch
 Fallback:    Simple overlay if native integration too complex
-Stretch:     Feature 4 (personal reels), Veo stylized replays
+Stretch:     Veo stylized replays, advanced color grading
 ```
 
-**Target Prizes:** TwelveLabs (full API), Shopify (shoppable video), Gemini (Veo generation), Top 3 Overall
+**Target Prizes:** TwelveLabs (embeddings + search), Shopify (shoppable video), Gemini (Veo generation), Top 3 Overall
 
-**Theme Connection:** Music upload directly addresses "Identity" - users express their personal/team identity through their choice of soundtrack.
+**Theme Connection - "Identity":**
+1. **Feature 4 (Personal Highlight Reels):** Users create highlight reels about THEMSELVES using natural language - "show me my best moments," "when I scored," "me celebrating." This is the STRONGEST identity feature - it's literally about finding yourself in the video.
+2. **Feature 5 (Personal Music):** Users express their personal/team identity through their choice of soundtrack.
+3. **Embeddings Throughout:** Match video segments to user's desired vibe/identity (High Energy, Emotional, Calm).
+
+**Why Feature 4 is Prioritized:**
+- **Strongest Identity Connection:** Natural language search for "me," "player 23," "guy in yellow pants" - finding YOUR identity in footage
+- **Fast Implementation:** Uses existing TwelveLabs index, no rendering pipeline complexity
+- **Instant Results:** On-demand generation, no batch processing delays
+- **Demo Impact:** Live queries during presentation - "show me when I scored" → instant 30s reel
+- **Embedding Showcase:** Perfect use case for TwelveLabs embeddings + semantic search
