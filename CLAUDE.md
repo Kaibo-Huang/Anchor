@@ -43,7 +43,7 @@ docker run -d -p 6379:6379 redis:alpine                               # Redis
 
 ## Architecture
 ```
-Upload 2-12 videos → S3 → Audio sync → TwelveLabs analysis
+Upload up to 12 videos → S3 → Audio sync → TwelveLabs analysis
   → Feature 1: Multi-angle switching (best angle per moment)
   → Feature 2: Auto-zoom on key moments
   → Feature 3: Shopify ads + Veo product videos + sponsor power plays
