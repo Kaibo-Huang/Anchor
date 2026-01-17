@@ -728,124 +728,6 @@ CONTEXT_ADS = {
 
 ---
 
-## MONETIZATION MODEL
-
-### Revenue Streams
-
-**1. Shopify Affiliate Links**
-```python
-def generate_affiliate_link(product, store_url, affiliate_id):
-    # Shopify Affiliate program integration
-    base_url = product["checkout_url"]
-    affiliate_params = f"?ref={affiliate_id}&utm_source=anchor&utm_medium=video"
-
-    return {
-        "url": f"{base_url}{affiliate_params}",
-        "commission_rate": 0.10,  # 10% default
-        "tracking_id": generate_tracking_id()
-    }
-```
-
-**2. Sponsorship Model**
-- **Sponsored Events**: Brand pays flat fee → use affiliate links for tracking
-- **Organic Events**: Traditional CPM/CPC advertising → Google AdSense fallback
-
-**3. Pricing Tiers**
-```python
-PRICING = {
-    "free": {
-        "price": 0,
-        "features": ["Multi-angle switching", "Watermarked output", "Max 60s"],
-        "ads": "banner_overlays"
-    },
-    "creator": {
-        "price": 19,  # per event
-        "features": ["HD no watermark", "Auto-zoom", "Smart ad placement", "Max 5 min"],
-        "ads": "native_integration",
-        "revenue_share": 0.70  # Creator gets 70% of affiliate revenue
-    },
-    "pro": {
-        "price": 99,  # per event
-        "features": ["4K", "Personal reels", "Custom branding", "Unlimited length"],
-        "ads": "optional",
-        "revenue_share": 0.85
-    },
-    "enterprise": {
-        "price": "custom",
-        "features": ["API access", "White-label", "Dedicated support"],
-        "ads": "bring_your_own_sponsors"
-    }
-}
-```
-
-**4. Affiliate Revenue Split**
-```
-Sponsored event:
-  Brand → $500 flat fee → Anchor
-  Affiliate sales → 10% commission → Anchor (70%) + Event creator (30%)
-
-Organic event (Creator tier):
-  Affiliate sales → 10% commission → Anchor (30%) + Event creator (70%)
-
-Example: $1000 in product sales via video
-  → $100 commission
-  → Creator gets $70, Anchor gets $30
-```
-
-**5. Analytics Dashboard**
-```python
-class MonetizationStats:
-    total_views: int
-    unique_viewers: int
-    ad_impressions: int
-    ad_clicks: int
-    affiliate_conversions: int
-    affiliate_revenue: float
-    creator_payout: float
-
-    ctr: float  # click-through rate
-    conversion_rate: float
-    avg_order_value: float
-```
-
-**6. Integration with Shopify**
-```python
-async def setup_sponsorship(event_id: str, shopify_store_url: str):
-    # Verify store ownership
-    store = await verify_shopify_store(shopify_store_url)
-
-    # Create affiliate program
-    affiliate = await create_affiliate_program(store)
-
-    # Auto-select products for ads
-    products = await get_products(shopify_store_url)
-    featured = select_featured_products(products, max=5)
-
-    # Generate tracking pixels
-    tracking = create_conversion_tracking(event_id, affiliate.id)
-
-    return {
-        "affiliate_id": affiliate.id,
-        "products": featured,
-        "tracking_code": tracking.code
-    }
-```
-
-**7. Traditional Ad Fallback**
-```python
-# If no Shopify sponsor, use Google AdSense
-async def get_fallback_ads(event_context):
-    if event_context.type == "sports":
-        categories = ["sporting_goods", "tickets", "apparel"]
-    elif event_context.type == "ceremony":
-        categories = ["education", "professional_services", "gifts"]
-
-    # Programmatic ad insertion
-    return await adsense_client.get_video_ads(categories, duration=5)
-```
-
----
-
 ## FEATURE 4: Personalized Highlight Reels (Stretch)
 
 **What:** Generate individual videos for each person (e.g., each graduate gets their own reel).
@@ -894,14 +776,10 @@ def create_personal_reel(person_id, appearances, target_duration=30):
 async def generate_all_reels(event_id, persons):
     tasks = [generate_reel(event_id, p) for p in persons]
     results = await asyncio.gather(*tasks)
-    
+
     for person, url in zip(persons, results):
         await send_email(person.email, url)
 ```
-
-**6. Monetization**
-- Free: 20s watermarked
-- $10: Full 45s HD no watermark
 
 ---
 

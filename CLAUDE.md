@@ -163,18 +163,6 @@ TEMPLATES = {
 
 ---
 
-## MONETIZATION
-
-| Tier | Price | Features | Revenue Share |
-|------|-------|----------|---------------|
-| Free | $0 | Multi-angle, watermark, 60s max | Banner ads |
-| Creator | $19/event | HD, auto-zoom, smart ads, 5min | Creator 70% |
-| Pro | $99/event | 4K, personal reels, unlimited | Creator 85% |
-
-**Affiliate:** Shopify links with `?ref={affiliate_id}` → 10% commission split per tier.
-
----
-
 ## FEATURE 4: Personal Reels (Stretch)
 
 **Goal:** Individual highlight video for each person (e.g., each graduate).
