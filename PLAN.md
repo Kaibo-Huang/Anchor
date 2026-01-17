@@ -1378,14 +1378,189 @@ One-command: `docker-compose up --build`
 
 ---
 
+## Degraded Mode / Fallback Strategies
+
+**Goal:** Ensure every feature has graceful fallback when dependencies fail - critical for hackathon time constraints and demo reliability.
+
+### Feature 1: Multi-Angle Switching
+- **Primary:** librosa audio fingerprinting (<100ms sync accuracy)
+- **Degraded Mode 1:** Metadata-only alignment with 5s accuracy + warning to user
+- **Degraded Mode 2:** Manual offset adjustment UI (user drags timeline to sync)
+- **Fallback:** Use first uploaded video as master, no switching
+- **User Notification:** "Audio sync accuracy reduced - using device timestamps"
+
+### Feature 2: Auto-Zoom
+- **Primary:** FFmpeg zoompan with ease-in/ease-out
+- **Degraded Mode:** Static crop (no smooth zoom) on high-action moments
+- **Fallback:** Skip zoom entirely, log moments for manual review
+- **User Notification:** None (feature is optional enhancement)
+
+### Feature 3: Brand Integration
+- **Primary:** Native video replacement with Veo-generated product ads + seamless transitions
+- **Degraded Mode 1:** Static product images with Ken Burns effect instead of Veo video
+- **Degraded Mode 2:** Simple overlay with product card (title, price, image)
+- **Degraded Mode 3:** Lower-third banner with sponsor name only
+- **Fallback:** Skip ad integration, return master video without ads
+- **User Notification:** "Product video generation unavailable - using static overlay"
+
+**Veo Failure Handling:**
+```python
+try:
+    product_video = await generate_veo_video(product, transition_style)
+except VeoAPIError as e:
+    logger.warning(f"Veo generation failed: {e}, falling back to static overlay")
+    product_video = create_static_product_card(product)  # FFmpeg with product image
+except VeoTimeoutError:
+    logger.warning("Veo timeout, skipping this ad slot")
+    continue  # Move to next ad slot
+```
+
+### Feature 4: On-Demand Highlight Reels
+- **Primary:** TwelveLabs natural language search + embedding-based vibe ranking
+- **Degraded Mode 1:** Keyword matching only (no embeddings) with lower quality
+- **Degraded Mode 2:** Manual timestamp selection UI
+- **Fallback:** Return full video with chapters, user navigates manually
+- **User Notification:** "Smart search unavailable - showing all matching clips"
+
+**TwelveLabs Failure Handling:**
+```python
+try:
+    search_results = await twelvelabs_search(query)
+    if search_results.data:
+        ranked_moments = rank_by_embedding_similarity(search_results, vibe)
+    else:
+        raise ValueError("No search results")
+except (TwelveLabsAPIError, ValueError) as e:
+    logger.warning(f"TwelveLabs search failed: {e}, falling back to keyword match")
+    # Simple text matching in video filenames or user-provided descriptions
+    ranked_moments = keyword_fallback_search(query, video_metadata)
+    user_notification = "Using basic search - results may be less accurate"
+```
+
+### Feature 5: Personal Music Integration
+- **Primary:** Beat-synced cuts + audio ducking + intensity-based volume
+- **Degraded Mode 1:** Music loop with simple fade-in/out (no beat sync)
+- **Degraded Mode 2:** Fixed 50/50 mix (no ducking)
+- **Fallback:** Event audio only, no music
+- **User Notification:** "Music analysis failed - using simple audio mix"
+
+**librosa Failure Handling:**
+```python
+try:
+    music_metadata = analyze_music_track(music_path)
+    timeline = align_cuts_to_beats(timeline, music_metadata['beat_times_ms'])
+except LibrosaError as e:
+    logger.warning(f"Beat detection failed: {e}, using simple loop")
+    music_metadata = {"duration_ms": get_audio_duration(music_path), "beat_times_ms": []}
+    # No beat sync, just loop music to video length
+```
+
+### Cross-Cutting Concerns
+
+**S3 Upload Failures:**
+```python
+MAX_RETRIES = 3
+RETRY_DELAY_SEC = 2
+
+async def upload_with_retry(file_path, s3_key):
+    for attempt in range(MAX_RETRIES):
+        try:
+            return await s3_client.upload_file(file_path, s3_key)
+        except S3Error as e:
+            if attempt == MAX_RETRIES - 1:
+                raise HTTPException(500, f"Upload failed after {MAX_RETRIES} attempts")
+            await asyncio.sleep(RETRY_DELAY_SEC * (attempt + 1))
+```
+
+**FFmpeg Rendering Failures:**
+```python
+try:
+    ffmpeg_output = run_ffmpeg_command(cmd)
+except FFmpegError as e:
+    logger.error(f"FFmpeg failed: {e.stderr}")
+    if "Conversion failed" in e.stderr:
+        # Try with lower quality settings
+        cmd_fallback = cmd.with_crf(28).with_preset('fast')
+        ffmpeg_output = run_ffmpeg_command(cmd_fallback)
+    else:
+        raise HTTPException(500, "Video rendering failed - check input files")
+```
+
+**TwelveLabs Index Creation Timeout:**
+```python
+# Don't block user - process async and notify when ready
+task = client.task.create(index_id=index.id, url=s3_url)
+
+# Poll with timeout
+max_wait_sec = 300  # 5 minutes
+start = time.time()
+while time.time() - start < max_wait_sec:
+    status = client.task.get(task.id)
+    if status.status == "ready":
+        break
+    await asyncio.sleep(5)
+else:
+    logger.warning(f"TwelveLabs indexing timeout for {s3_url}")
+    # Mark video as "analysis_pending", allow user to proceed with basic features
+    await update_video(video_id, {"status": "analysis_pending"})
+    return {"status": "processing", "message": "Analysis taking longer than expected"}
+```
+
+### User Experience During Degradation
+
+**Status Updates:**
+```python
+# Real-time status via Supabase Realtime
+await supabase.table('events').update({
+    "id": event_id,
+    "processing_status": "rendering",
+    "current_step": "Mixing audio (beat sync unavailable)",
+    "warnings": ["Using simple audio mix - beat detection failed"]
+}).execute()
+```
+
+**Frontend Handling:**
+```tsx
+// Show warnings but don't block
+{event.warnings?.map(warning => (
+  <Alert variant="warning" key={warning}>
+    <AlertTriangle className="h-4 w-4" />
+    <AlertDescription>{warning}</AlertDescription>
+  </Alert>
+))}
+```
+
+### Testing Degraded Modes
+
+**Mock API Failures in Development:**
+```python
+# backend/config.py
+class FeatureFlags:
+    FORCE_AUDIO_SYNC_FAIL = os.getenv("FORCE_AUDIO_SYNC_FAIL") == "true"
+    FORCE_VEO_FAIL = os.getenv("FORCE_VEO_FAIL") == "true"
+    FORCE_TWELVELABS_FAIL = os.getenv("FORCE_TWELVELABS_FAIL") == "true"
+
+# Use in services
+if FeatureFlags.FORCE_VEO_FAIL:
+    raise VeoAPIError("Simulated failure for testing")
+```
+
+**Demo Script Includes Fallback Demo:**
+- Show primary flow working
+- Trigger degraded mode (disconnect API key)
+- Show graceful fallback + user notification
+- Re-enable and show recovery
+
+---
+
 ## Build Priority (IDENTITY-FIRST)
 ```
 Hours 0-4:   Setup (repos, Supabase, S3, API keys, TwelveLabs embeddings)
-Hours 4-12:  Feature 1 (multi-angle switching with embedding-based scoring)
-Hours 12-18: Feature 4 (On-Demand Highlight Reels - CORE IDENTITY FEATURE)
-Hours 18-24: Feature 5 (personal music integration - IDENTITY THEME)
-Hours 24-28: Feature 2 (auto-zoom with FFmpeg)
-Hours 28-34: Feature 3 (Native ad integration: Veo + seamless transitions)
+Hours 4-12:  Feature 1 (multi-angle switching with embedding-based scoring + degraded mode)
+Hours 12-18: Feature 4 (On-Demand Highlight Reels - CORE IDENTITY FEATURE + keyword fallback)
+Hours 18-24: Feature 5 (personal music integration - IDENTITY THEME + simple mix fallback)
+Hours 24-28: Feature 2 (auto-zoom with FFmpeg + static crop fallback)
+Hours 28-34: Feature 3 (Native ad integration: Veo + seamless transitions + overlay fallback)
 Hours 34-36: Polish, demo, pitch
 Fallback:    Simple overlay if native integration too complex
 Stretch:     Veo stylized replays, advanced color grading
