@@ -77,6 +77,9 @@ cd backend && uv run celery -A worker worker --loglevel=info
 
 # Redis
 docker run -d -p 6379:6379 redis:alpine
+
+# Docker (Full Stack - Post-Hackathon)
+# docker-compose up --build
 ```
 
 ## Architecture
@@ -939,6 +942,57 @@ anchor/
 └── README.md
 ```
 
+## Docker Deployment (Post-Hackathon Goal)
+
+**Goal:** Fully containerize the application for easy deployment and scaling.
+
+### Docker Compose Structure
+```yaml
+services:
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    depends_on: [backend]
+  
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    depends_on: [redis, postgres]
+    volumes: ["./temp:/app/temp"]  # For video processing
+  
+  celery:
+    build: ./backend
+    command: celery -A worker worker --loglevel=info
+    depends_on: [redis, backend]
+    volumes: ["./temp:/app/temp"]
+  
+  redis:
+    image: redis:alpine
+    ports: ["6379:6379"]
+  
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: anchor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+```
+
+### Benefits
+- One-command deployment: `docker-compose up`
+- Consistent environments (dev/staging/prod)
+- Easy scaling (multiple Celery workers)
+- Simplified CI/CD pipeline
+- FFmpeg pre-installed in containers
+
+### Implementation Priority
+- **Hackathon:** Development mode (local installs)
+- **Post-Hackathon:** Dockerize for production deployment
+- **Production:** Add nginx reverse proxy, health checks, auto-restart policies
+
+---
+
 ## Build Priority (Hackathon)
 ```
 Hours 0-4:   Setup (repos, Supabase, S3, API keys)
@@ -948,6 +1002,7 @@ Hours 20-28: Feature 3A (Shopify + Veo ads + sponsor power plays) ← Prize diff
 Hours 28-36: Polish, demo prep, pitch practice
 
 Stretch:     Feature 3B (native ads), Feature 4 (personal reels), Veo stylized replays
+Post-Launch: Full Docker containerization for production deployment
 ```
 
 ## Target Prizes
