@@ -129,19 +129,94 @@ export async function analyzeMusic(eventId: string): Promise<{ message: string }
   })
 }
 
-// Shopify API
-export async function getShopifyAuthUrl(eventId: string, shop: string): Promise<{ auth_url: string }> {
-  return apiRequest(`/api/events/${eventId}/shopify/auth-url?shop=${encodeURIComponent(shop)}`)
+// Shopify Store API (Brand-level)
+export interface ShopifyStore {
+  id: string
+  shop_domain: string
+  shop_name: string | null
+  status: string
+  installed_at: string
+  last_sync_at: string | null
+  product_count: number
 }
 
 export interface ShopifyProduct {
   id: string
   title: string
-  description: string
-  price: string
+  description: string | null
+  price: number | string
   currency: string
   image_url: string | null
   checkout_url: string | null
+  synced_at?: string
+}
+
+export interface BrandProduct {
+  id: string
+  display_order: number
+  is_primary: boolean
+  store: ShopifyStore
+  product: ShopifyProduct
+}
+
+export async function getShopifyInstallUrl(shop: string): Promise<{ install_url: string; shop: string }> {
+  return apiRequest(`/api/shopify/install?shop=${encodeURIComponent(shop)}`)
+}
+
+export async function listShopifyStores(
+  status: string = 'active',
+  limit: number = 50,
+  offset: number = 0
+): Promise<{ stores: ShopifyStore[] }> {
+  return apiRequest(`/api/shopify/stores?status=${status}&limit=${limit}&offset=${offset}`)
+}
+
+export async function getShopifyStore(storeId: string): Promise<ShopifyStore> {
+  return apiRequest(`/api/shopify/stores/${storeId}`)
+}
+
+export async function syncShopifyStore(storeId: string): Promise<{ message: string; task_id: string; store_id: string }> {
+  return apiRequest(`/api/shopify/stores/${storeId}/sync`, { method: 'POST' })
+}
+
+export async function getShopifyStoreProducts(
+  storeId: string,
+  limit: number = 50,
+  offset: number = 0
+): Promise<{ products: ShopifyProduct[] }> {
+  return apiRequest(`/api/shopify/stores/${storeId}/products?limit=${limit}&offset=${offset}`)
+}
+
+// Event-Brand Association API
+export async function getEventBrands(eventId: string): Promise<{ brand_products: BrandProduct[] }> {
+  return apiRequest(`/api/events/${eventId}/brands`)
+}
+
+export async function addEventBrands(
+  eventId: string,
+  storeId: string,
+  productIds: string[],
+  setPrimary: boolean = false
+): Promise<{ message: string; associations: any[] }> {
+  return apiRequest(`/api/events/${eventId}/brands`, {
+    method: 'POST',
+    body: JSON.stringify({
+      store_id: storeId,
+      product_ids: productIds,
+      set_primary: setPrimary,
+    }),
+  })
+}
+
+export async function removeEventBrand(eventId: string, associationId: string): Promise<{ message: string }> {
+  return apiRequest(`/api/events/${eventId}/brands/${associationId}`, {
+    method: 'DELETE',
+  })
+}
+
+// Legacy Shopify API (for backward compatibility)
+export async function getShopifyAuthUrl(eventId: string, shop: string): Promise<{ auth_url: string }> {
+  return apiRequest(`/api/events/${eventId}/shopify/auth-url?shop=${encodeURIComponent(shop)}`)
 }
 
 export async function getShopifyProducts(eventId: string): Promise<{ products: ShopifyProduct[] }> {
