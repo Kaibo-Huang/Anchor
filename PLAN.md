@@ -193,51 +193,81 @@ analyses = asyncio.run(wait_for_all_analyses())
 
 **Chapter Generation (from TwelveLabs data)**
 
-Auto-generate YouTube-compatible chapter timestamps from scene classification + transcription:
+Generate internal chapter markers for navigation in the web player (not for YouTube upload):
 
 ```python
-def generate_chapters(video_analysis, timeline):
+from config import VideoConfig
+
+def generate_chapters(timeline_analysis, event_type):
     """
-    Generate YouTube-compatible chapter timestamps.
-    Based on YouTube Chapter Highlight Generator approach.
+    Generate chapter markers for major events and scene transitions.
+    Used for player navigation, NOT YouTube upload.
+
+    Returns list of dicts with timestamp_ms, title, and type.
     """
     chapters = []
+    last_chapter_ms = 0
 
-    for segment in timeline:
-        # Use TwelveLabs scene classification + transcription
-        chapter_title = determine_chapter_title(
-            segment,
-            video_analysis.scenes,
-            video_analysis.transcription
-        )
+    for analysis in timeline_analysis:
+        # Skip if too close to previous chapter
+        if analysis.timestamp_ms - last_chapter_ms < VideoConfig.CHAPTER_MIN_DURATION_MS:
+            continue
 
-        timestamp = ms_to_timestamp(segment["start_ms"])
-        chapters.append(f"{timestamp} {chapter_title}")
+        # Type 1: High action moments (goals, scores, awards)
+        if analysis.action_intensity >= 8:
+            chapters.append({
+                "timestamp_ms": analysis.timestamp_ms,
+                "title": analysis.scene_classification or "Key Moment",
+                "type": "highlight"
+            })
+            last_chapter_ms = analysis.timestamp_ms
 
-    return "\n".join(chapters)
+        # Type 2: Major scene transitions (halftime, new award category, etc.)
+        elif hasattr(analysis, 'is_major_scene_boundary') and analysis.is_major_scene_boundary:
+            chapters.append({
+                "timestamp_ms": analysis.timestamp_ms,
+                "title": analysis.scene_classification or "New Section",
+                "type": "section"
+            })
+            last_chapter_ms = analysis.timestamp_ms
 
-def ms_to_timestamp(ms):
-    """Convert milliseconds to YouTube timestamp format (MM:SS or HH:MM:SS)."""
-    seconds = ms // 1000
-    minutes = seconds // 60
-    hours = minutes // 60
+        # Type 3: Event-specific important moments
+        elif event_type == "sports" and analysis.scene_classification in ["timeout", "halftime", "quarter_end"]:
+            chapters.append({
+                "timestamp_ms": analysis.timestamp_ms,
+                "title": analysis.scene_classification.replace("_", " ").title(),
+                "type": "section"
+            })
+            last_chapter_ms = analysis.timestamp_ms
 
-    if hours > 0:
-        return f"{hours}:{minutes % 60:02d}:{seconds % 60:02d}"
-    return f"{minutes}:{seconds % 60:02d}"
+        elif event_type == "ceremony" and analysis.scene_classification in ["award_presentation", "speech_start"]:
+            chapters.append({
+                "timestamp_ms": analysis.timestamp_ms,
+                "title": analysis.scene_classification.replace("_", " ").title(),
+                "type": "section"
+            })
+            last_chapter_ms = analysis.timestamp_ms
 
-def determine_chapter_title(segment, scenes, transcription):
-    """Determine chapter title from scene context and speech."""
-    # Priority: explicit speech mention > scene classification > generic
-    if segment.get("text"):
-        return extract_key_phrase(segment["text"])
+    # Always include opening timestamp
+    if not chapters or chapters[0]["timestamp_ms"] > 0:
+        chapters.insert(0, {
+            "timestamp_ms": 0,
+            "title": "Start",
+            "type": "section"
+        })
 
-    if scenes:
-        scene = find_scene_at(scenes, segment["start_ms"])
-        if scene:
-            return scene.classification
+    return chapters
+```
 
-    return f"Segment {segment.get('index', 0) + 1}"
+**Example output for 10-minute basketball game:**
+```json
+[
+  {"timestamp_ms": 0, "title": "Start", "type": "section"},
+  {"timestamp_ms": 45000, "title": "First Basket", "type": "highlight"},
+  {"timestamp_ms": 120000, "title": "Three Pointer", "type": "highlight"},
+  {"timestamp_ms": 300000, "title": "Halftime", "type": "section"},
+  {"timestamp_ms": 480000, "title": "Final Shot", "type": "highlight"}
+]
 ```
 
 **4. User Instructions Integration**
@@ -486,6 +516,419 @@ ffmpeg -i input.mp4 -vf "zoompan=z='min(zoom+0.001,1.5)':d=90:x='iw/2-(iw/zoom/2
 **Approach:** Native Content Integration (seamless video replacement with crossfade transitions)
 
 **Fallback:** If time-constrained, use simple overlay approach (see section 3D)
+
+---
+
+### 3A: Shopify OAuth Integration
+
+**Goal:** Allow users to securely connect their Shopify store, automatically fetch products.
+
+#### Setup: Create Shopify App (One-Time)
+
+**1. Create App in Shopify Partner Dashboard:**
+- Navigate to: https://partners.shopify.com/
+- Create new app: "Anchor Video Ads"
+- App URL: `https://anchor.app` (or `https://ngrok-url.app` for dev)
+- Allowed redirection URLs: `https://anchor.app/api/auth/shopify/callback`
+
+**2. Configure App Scopes:**
+```
+read_products          → Fetch product catalog
+read_product_listings  → Get published products only
+read_files             → Access product images
+```
+
+**3. Get Credentials:**
+```bash
+# Add to .env
+SHOPIFY_API_KEY=<from partner dashboard>
+SHOPIFY_API_SECRET=<from partner dashboard>
+SHOPIFY_API_VERSION=2024-01
+ENCRYPTION_KEY=<generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+```
+
+#### OAuth Flow Implementation
+
+**Step 1: User Initiates Connection (Frontend)**
+
+```tsx
+// frontend/components/ShopifyConnect.tsx
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ShoppingBag, CheckCircle } from 'lucide-react'
+
+export function ShopifyConnect({ eventId, isConnected, storeUrl }: Props) {
+  const [shopDomain, setShopDomain] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleConnect = async () => {
+    setLoading(true)
+    try {
+      // Get OAuth URL from backend
+      const response = await fetch(
+        `/api/events/${eventId}/shopify/auth-url?shop=${shopDomain}`
+      )
+      const { auth_url } = await response.json()
+
+      // Redirect to Shopify OAuth
+      window.location.href = auth_url
+    } catch (error) {
+      console.error('Failed to initiate OAuth:', error)
+      setLoading(false)
+    }
+  }
+
+  if (isConnected) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CheckCircle className="h-5 w-5 text-green-500" />
+            Shopify Connected
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-gray-600 mb-3">{storeUrl}</p>
+          <Button variant="outline" size="sm">Disconnect</Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect Shopify Store</CardTitle>
+        <CardDescription>
+          Connect your Shopify store to automatically insert product ads into your highlight reels
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex gap-2">
+          <Input
+            placeholder="your-store.myshopify.com"
+            value={shopDomain}
+            onChange={(e) => setShopDomain(e.target.value)}
+            disabled={loading}
+          />
+          <Button
+            onClick={handleConnect}
+            disabled={loading || !shopDomain}
+          >
+            <ShoppingBag className="mr-2 h-4 w-4" />
+            Connect
+          </Button>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">
+          We'll redirect you to Shopify to authorize access
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+```
+
+**Step 2: Generate OAuth URL (Backend)**
+
+```python
+# backend/routers/shopify.py
+from fastapi import APIRouter, HTTPException, Query
+import secrets
+from urllib.parse import urlencode
+import os
+
+router = APIRouter()
+
+SHOPIFY_API_KEY = os.getenv("SHOPIFY_API_KEY")
+SHOPIFY_API_SECRET = os.getenv("SHOPIFY_API_SECRET")
+BASE_URL = os.getenv("BASE_URL")  # https://anchor.app
+
+@router.get("/api/events/{event_id}/shopify/auth-url")
+async def get_shopify_auth_url(
+    event_id: str,
+    shop: str = Query(..., description="Shop domain (e.g., my-store.myshopify.com)")
+):
+    """
+    Step 1 of OAuth: Generate authorization URL.
+    User will be redirected to Shopify to approve app.
+    """
+    # Validate shop domain
+    if not shop.endswith('.myshopify.com'):
+        raise HTTPException(400, "Invalid shop domain. Must end with .myshopify.com")
+
+    # Generate random nonce for CSRF protection
+    nonce = secrets.token_urlsafe(32)
+
+    # Store nonce + event_id in Redis (expires in 10 minutes)
+    await redis.setex(
+        f"shopify_oauth:{nonce}",
+        600,  # 10 minutes
+        event_id
+    )
+
+    # Build Shopify OAuth URL
+    oauth_params = {
+        "client_id": SHOPIFY_API_KEY,
+        "scope": "read_products,read_product_listings,read_files",
+        "redirect_uri": f"{BASE_URL}/api/auth/shopify/callback",
+        "state": nonce,
+        "grant_options[]": "per-user"  # Request online access token
+    }
+
+    auth_url = f"https://{shop}/admin/oauth/authorize?{urlencode(oauth_params)}"
+
+    return {"auth_url": auth_url}
+```
+
+**Step 3: Handle OAuth Callback**
+
+```python
+# backend/routers/shopify.py
+from fastapi import Request
+from fastapi.responses import RedirectResponse
+import hmac
+import hashlib
+import httpx
+
+@router.get("/api/auth/shopify/callback")
+async def shopify_oauth_callback(
+    request: Request,
+    code: str = Query(...),
+    shop: str = Query(...),
+    state: str = Query(...),
+    hmac_param: str = Query(..., alias="hmac")
+):
+    """
+    Step 2 of OAuth: Shopify redirects here after user approves.
+    Exchange authorization code for access token.
+    """
+    # 1. Verify HMAC signature (security check)
+    if not verify_shopify_hmac(dict(request.query_params), SHOPIFY_API_SECRET):
+        raise HTTPException(403, "Invalid HMAC signature")
+
+    # 2. Verify state/nonce (CSRF protection)
+    event_id = await redis.get(f"shopify_oauth:{state}")
+    if not event_id:
+        raise HTTPException(400, "Invalid or expired state parameter")
+
+    # Clean up nonce
+    await redis.delete(f"shopify_oauth:{state}")
+
+    # 3. Exchange code for access token
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://{shop}/admin/oauth/access_token",
+            json={
+                "client_id": SHOPIFY_API_KEY,
+                "client_secret": SHOPIFY_API_SECRET,
+                "code": code
+            }
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(500, f"Failed to exchange code: {response.text}")
+
+        token_data = response.json()
+        access_token = token_data["access_token"]
+
+    # 4. Encrypt and store access token
+    from services.encryption import encrypt
+
+    encrypted_token = encrypt(access_token)
+
+    await supabase.table("events").update({
+        "shopify_store_url": f"https://{shop}",
+        "shopify_access_token": encrypted_token,
+        "shopify_connected_at": "now()"
+    }).eq("id", event_id).execute()
+
+    # 5. Redirect to success page
+    frontend_url = os.getenv("NEXT_PUBLIC_BASE_URL")
+    return RedirectResponse(f"{frontend_url}/events/{event_id}?shopify=connected")
+
+
+def verify_shopify_hmac(params: dict, secret: str) -> bool:
+    """
+    Verify Shopify HMAC signature to prevent tampering.
+    Critical security check!
+    """
+    provided_hmac = params.pop('hmac', None)
+    if not provided_hmac:
+        return False
+
+    # Build sorted query string (excluding hmac)
+    sorted_params = sorted(params.items())
+    query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
+
+    # Calculate HMAC-SHA256
+    computed_hmac = hmac.new(
+        secret.encode(),
+        query_string.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+    # Constant-time comparison (prevents timing attacks)
+    return hmac.compare_digest(computed_hmac, provided_hmac)
+```
+
+**Step 4: Token Encryption Service**
+
+```python
+# backend/services/encryption.py
+from cryptography.fernet import Fernet
+import os
+
+# Load encryption key from environment
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise ValueError("ENCRYPTION_KEY not set in environment")
+
+cipher = Fernet(ENCRYPTION_KEY.encode())
+
+def encrypt(plaintext: str) -> str:
+    """Encrypt sensitive data (access tokens)."""
+    return cipher.encrypt(plaintext.encode()).decode()
+
+def decrypt(ciphertext: str) -> str:
+    """Decrypt sensitive data."""
+    return cipher.decrypt(ciphertext.encode()).decode()
+```
+
+**Step 5: Fetch Products API**
+
+```python
+# backend/services/shopify.py
+import httpx
+from typing import List, Dict
+
+class ShopifyService:
+    """Service for interacting with Shopify API."""
+
+    def __init__(self, shop_url: str, access_token: str):
+        self.shop_url = shop_url
+        self.access_token = access_token
+        self.api_version = os.getenv("SHOPIFY_API_VERSION", "2024-01")
+
+    async def get_products(self, limit: int = 10) -> List[Dict]:
+        """Fetch active products from Shopify store."""
+        url = f"{self.shop_url}/admin/api/{self.api_version}/products.json"
+
+        headers = {
+            "X-Shopify-Access-Token": self.access_token,
+            "Content-Type": "application/json"
+        }
+
+        params = {
+            "limit": limit,
+            "status": "active",
+            "published_status": "published"
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params)
+
+            if response.status_code != 200:
+                raise HTTPException(500, f"Shopify API error: {response.text}")
+
+            products = response.json()["products"]
+
+            # Transform to our internal format
+            return [
+                {
+                    "id": str(p["id"]),
+                    "title": p["title"],
+                    "description": p.get("body_html", ""),
+                    "price": float(p["variants"][0]["price"]),
+                    "currency": p["variants"][0].get("currency_code", "USD"),
+                    "image_url": p["images"][0]["src"] if p.get("images") else None,
+                    "variant_id": p["variants"][0]["id"],
+                    "checkout_url": f"{self.shop_url}/cart/{p['variants'][0]['id']}:1"
+                }
+                for p in products
+                if p.get("images")  # Only products with images
+            ]
+
+
+# API Endpoint
+@router.get("/api/events/{event_id}/shopify/products")
+async def get_shopify_products(event_id: str):
+    """Get products from connected Shopify store."""
+    event = await supabase.table("events").select("*").eq("id", event_id).single().execute()
+    event_data = event.data
+
+    if not event_data.get("shopify_access_token"):
+        raise HTTPException(400, "Shopify store not connected")
+
+    # Decrypt token
+    from services.encryption import decrypt
+    access_token = decrypt(event_data["shopify_access_token"])
+
+    # Fetch products
+    shopify = ShopifyService(event_data["shopify_store_url"], access_token)
+    products = await shopify.get_products(limit=10)
+
+    return {"products": products, "count": len(products)}
+```
+
+#### Database Schema
+
+```sql
+-- Add Shopify columns to events table
+ALTER TABLE events ADD COLUMN shopify_store_url TEXT;
+ALTER TABLE events ADD COLUMN shopify_access_token TEXT;  -- Encrypted
+ALTER TABLE events ADD COLUMN shopify_connected_at TIMESTAMPTZ;
+
+-- Create index for lookups
+CREATE INDEX idx_events_shopify_connected ON events(shopify_store_url) WHERE shopify_store_url IS NOT NULL;
+```
+
+#### Security Best Practices
+
+1. **HMAC Verification:** Always verify Shopify's HMAC signature on callbacks
+2. **Token Encryption:** Store access tokens encrypted at rest (using Fernet)
+3. **CSRF Protection:** Use nonce/state parameter with short expiry (10 min)
+4. **HTTPS Only:** Shopify requires HTTPS for OAuth callbacks (use ngrok for dev)
+5. **Scope Minimization:** Only request necessary scopes (read_products, not write)
+
+#### Testing with ngrok (Development)
+
+```bash
+# Install ngrok
+brew install ngrok  # or download from ngrok.com
+
+# Start backend
+cd backend && uv run uvicorn main:app --reload --port 8000
+
+# Expose via ngrok
+ngrok http 8000
+
+# Update .env with ngrok URL
+BASE_URL=https://abc123.ngrok.io
+
+# Update Shopify app redirect URL in Partner Dashboard:
+# https://abc123.ngrok.io/api/auth/shopify/callback
+```
+
+#### Implementation Checklist
+
+- [ ] Create Shopify Partner account
+- [ ] Create app in Partner Dashboard
+- [ ] Set up redirect URL
+- [ ] Add API credentials to .env
+- [ ] Generate encryption key
+- [ ] Implement OAuth endpoints (auth-url, callback)
+- [ ] Add HMAC verification
+- [ ] Implement token encryption
+- [ ] Create ShopifyService class
+- [ ] Add database columns
+- [ ] Test OAuth flow with test store
+- [ ] Build frontend UI components
+
+**Time Estimate:** 3-4 hours
 
 ---
 
@@ -1199,7 +1642,7 @@ POST   /api/events/:id/generate         Generate final video
 GET    /api/events/:id/status           Processing status
 POST   /api/events/:id/shopify          Connect Shopify store
 POST   /api/events/:id/sponsor          Set sponsor for power plays
-GET    /api/events/:id/chapters         Get generated chapter timestamps
+GET    /api/events/:id/chapters         Get chapter markers (JSON with timestamps for player navigation)
 POST   /api/events/:id/reels/generate   Generate custom highlight reel from natural language query (stretch)
 
 # Example: Update video with user instructions
@@ -1266,7 +1709,7 @@ class VideoConfig:
     VEO_TRANSITION_CONTINUE_MOTION_MS = 800
 
     # Chapter Generation
-    CHAPTER_MIN_SCENE_DURATION_SEC = 8
+    CHAPTER_MIN_DURATION_MS = 60000  # Min 1 minute between chapter markers
 
     # Audio Sync
     AUDIO_SYNC_FINE_TUNE_TOLERANCE_MS = 100
@@ -1512,21 +1955,225 @@ services:
 
 ---
 
+## FEATURE 5: Personal Music Integration (Identity Theme)
+
+### Overview
+Users upload their own music that represents their identity - team anthem, graduation song, favorite track. The system intelligently mixes it with event audio, syncs cuts to beats, and ducks volume during speech.
+
+**Theme Connection:** Music is core to identity. Hockey teams have anthems, graduates have "their song," performers have signature tracks. This feature makes every highlight reel uniquely personal.
+
+### User Flow
+1. Upload event videos
+2. **Upload personal music file** (MP3, WAV, M4A)
+3. System analyzes music (beats, tempo, intensity)
+4. **Optional:** Enable beat-synced cuts for professional feel
+5. Generate video with music mixed intelligently
+
+### Technical Implementation
+
+#### 1. Music Upload & Storage
+
+**API Endpoint:**
+```python
+# backend/routers/music.py
+@router.post("/api/events/{event_id}/music/upload")
+async def get_music_upload_url(event_id: str):
+    """Get presigned S3 URL for music upload."""
+    file_key = f"music/{event_id}/{uuid.uuid4()}.mp3"
+    presigned_url = s3_client.generate_presigned_post(
+        Bucket=S3_BUCKET,
+        Key=file_key,
+        ExpiresIn=3600
+    )
+    return {"upload_url": presigned_url, "file_key": file_key}
+```
+
+**Frontend Component:**
+```tsx
+// frontend/components/MusicUpload.tsx
+export function MusicUpload({ eventId }: { eventId: string }) {
+  const handleUpload = async (file: File) => {
+    // Get presigned URL
+    const { upload_url } = await api.getMusicUploadUrl(eventId)
+
+    // Upload to S3
+    await uploadToS3(upload_url, file)
+
+    // Trigger analysis
+    await api.analyzeMusicTrack(eventId)
+  }
+
+  return (
+    <div className="border-2 border-dashed rounded-lg p-8">
+      <input type="file" accept="audio/*" onChange={handleUpload} />
+      <p className="text-sm text-gray-500">
+        Upload your team anthem, graduation song, or personal soundtrack
+      </p>
+    </div>
+  )
+}
+```
+
+#### 2. Music Analysis Service
+
+**Beat Detection & Metadata Extraction:**
+```python
+# backend/services/music_sync.py
+import librosa
+import numpy as np
+
+class MusicAnalysisService:
+    def __init__(self, audio_path: str):
+        self.audio_path = audio_path
+        self.y, self.sr = librosa.load(audio_path, sr=22050, mono=True)
+
+    def analyze(self) -> dict:
+        """Complete music analysis for video sync."""
+        return {
+            "tempo_bpm": self._get_tempo(),
+            "beat_times_ms": self._get_beat_times(),
+            "intro_end_ms": self._detect_intro_end(),
+            "outro_start_ms": self._detect_outro_start(),
+            "duration_ms": self._get_duration_ms(),
+            "intensity_curve": self._get_intensity_curve(),
+            "has_vocals": self._detect_vocals()
+        }
+
+    def _get_tempo(self) -> float:
+        """Detect BPM."""
+        tempo, _ = librosa.beat.beat_track(y=self.y, sr=self.sr)
+        return float(tempo)
+
+    def _get_beat_times(self) -> list[int]:
+        """Extract beat timestamps in milliseconds."""
+        _, beat_frames = librosa.beat.beat_track(y=self.y, sr=self.sr)
+        beat_times = librosa.frames_to_time(beat_frames, sr=self.sr)
+        return (beat_times * 1000).astype(int).tolist()
+
+    def _detect_intro_end(self) -> int:
+        """Find where intro ends (energy ramps up)."""
+        rms = librosa.feature.rms(y=self.y)[0]
+        # Find first sustained energy increase
+        window_size = int(self.sr * 2)  # 2-second window
+        for i in range(0, len(rms) - window_size, window_size // 4):
+            window_energy = np.mean(rms[i:i + window_size])
+            if window_energy > np.mean(rms) * 0.7:
+                return int((i / len(rms)) * self._get_duration_ms())
+        return 0
+
+    def _get_duration_ms(self) -> int:
+        """Total duration in milliseconds."""
+        return int(len(self.y) / self.sr * 1000)
+
+    def _get_intensity_curve(self) -> list[float]:
+        """Energy curve for dynamic volume (ducking)."""
+        rms = librosa.feature.rms(y=self.y, frame_length=2048)[0]
+        normalized = (rms - rms.min()) / (rms.max() - rms.min())
+        return normalized.tolist()
+```
+
+#### 3. Beat-Synced Cuts
+
+```python
+# backend/services/timeline.py
+def align_cuts_to_beats(segments: list[dict], beat_times_ms: list[int]) -> list[dict]:
+    """Snap angle switches to nearest beat (within 200ms tolerance)."""
+    for segment in segments:
+        nearest_beat = min(beat_times_ms, key=lambda b: abs(b - segment['start_ms']))
+        if abs(nearest_beat - segment['start_ms']) <= 200:
+            segment['start_ms'] = nearest_beat
+            segment['beat_synced'] = True
+    return segments
+```
+
+#### 4. Audio Ducking
+
+```python
+def create_ducking_filter(speech_segments, action_moments, ad_slots):
+    """Generate FFmpeg volume filter for intelligent ducking."""
+    filters = []
+
+    # Duck to 20% during speech
+    for seg in speech_segments:
+        filters.append(f"volume=0.2:enable='between(t,{seg['start']},{seg['end']})'")
+
+    # Boost to 120% during highlights
+    for moment in action_moments:
+        if moment['intensity'] >= 8:
+            filters.append(f"volume=1.2:enable='between(t,{moment['start']},{moment['end']})'")
+
+    # Fade out during ads
+    for ad in ad_slots:
+        filters.append(f"volume=0:enable='between(t,{ad['start']},{ad['end']})'")
+
+    return ",".join(filters)
+```
+
+#### 5. FFmpeg Rendering
+
+```bash
+# Mix music with event audio (ducking + fades)
+ffmpeg -i video.mp4 -i music.mp3 \
+  -filter_complex \
+    "[1:a]volume=0.5,afade=t=in:d=2,afade=t=out:d=3,{ducking_filter}[music]; \
+     [0:a]volume=1.0[event]; \
+     [music][event]amix=inputs=2:duration=first[audio]" \
+  -map 0:v -map "[audio]" output.mp4
+```
+
+### Configuration
+
+**Add to `backend/config.py`:**
+```python
+class VideoConfig:
+    # Music Integration
+    MUSIC_BEAT_SYNC_TOLERANCE_MS = 200
+    MUSIC_FADE_IN_SEC = 2
+    MUSIC_FADE_OUT_SEC = 3
+    MUSIC_DUCK_SPEECH_VOLUME = 0.2
+    MUSIC_BOOST_ACTION_VOLUME = 1.2
+
+MUSIC_MIX_PROFILES = {
+    "sports": {"music_volume": 0.5, "event_volume": 0.8, "duck_speech": True},
+    "ceremony": {"music_volume": 0.3, "event_volume": 1.0, "duck_speech": True},
+    "performance": {"music_volume": 0.2, "event_volume": 1.0, "duck_speech": False}
+}
+```
+
+### Database Updates
+
+```sql
+ALTER TABLE events ADD COLUMN music_url TEXT;
+ALTER TABLE events ADD COLUMN music_metadata JSONB;
+ALTER TABLE timelines ADD COLUMN beat_synced BOOLEAN DEFAULT false;
+```
+
+### Benefits
+
+1. **Identity Theme:** Music is deeply personal - represents team/individual identity
+2. **Professional Quality:** Beat-synced cuts feel like broadcast TV
+3. **Intelligent Mixing:** Never drowns out important moments
+4. **User Control:** Optional beat sync, configurable mix
+5. **Technical Showcase:** Audio analysis, intelligent ducking, seamless loops
+
+### Implementation Time
+- Full: **4-6 hours**
+- Minimal (basic mix, no beat-sync): **30 minutes**
+
+---
+
 ## Build Priority (Hackathon)
 ```
 Hours 0-4:   Setup (repos, Supabase, S3, API keys)
 Hours 4-12:  Feature 1 (multi-angle switching) ← Core functionality
 Hours 12-20: Feature 2 (auto-zoom) ← Visual impact
-Hours 20-28: Feature 3 (Native ad integration: Shopify + Veo) ← Prize differentiator
-             - Multi-factor ad slot detection
-             - Veo product video generation with motion matching
-             - Seamless video insertion with transitions
-             - Sponsor power plays
-Hours 28-36: Polish, demo prep, pitch practice
+Hours 20-26: Feature 5 (music integration) ← IDENTITY THEME
+Hours 26-32: Feature 3 (Native ad integration: Shopify + Veo) ← Prize differentiator
+Hours 32-36: Polish, demo prep, pitch practice
 
-Fallback:    If Feature 3 native integration too complex, use simple overlay (30 min implementation)
+Fallback:    Simple music mix (30min), simple ad overlay if native too complex
 Stretch:     Feature 4 (personal reels), Veo stylized replays
-Post-Launch: Full Docker containerization for production deployment
+Post-Launch: Full Docker containerization
 ```
 
 ## Target Prizes
