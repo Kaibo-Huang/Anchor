@@ -674,12 +674,49 @@ TEMPLATES = {
 - "emotional moments with me"
 
 ### Flow
-1. **User submits query + vibe preference** via API/UI
-2. **TwelveLabs natural language search with embeddings** → finds matching moments
-3. **Embedding-based ranking** by vibe (High Energy, Emotional, Calm) + confidence
-4. **Build 30s timeline** from top moments with music beat-sync
-5. **Render with FFmpeg** → add title card, concatenate clips with crossfades, add user's music
-6. **Return S3 URL** instantly (<10 seconds)
+1. **User submits query + vibe preference + duration** via API/UI
+2. **Calculate chunks needed** from requested duration (see below)
+3. **TwelveLabs natural language search with embeddings** → fetch candidate moments
+4. **Embedding-based ranking** by vibe (High Energy, Emotional, Calm) + confidence
+5. **Select clips using actual durations** to fill requested time exactly
+6. **Render with FFmpeg** → add title card, concatenate clips with crossfades, add user's music
+7. **Return S3 URL** instantly (<10 seconds)
+
+### Duration → Chunk Calculation
+```python
+from config import ReelConfig
+
+def calculate_chunks_needed(requested_duration_sec: int) -> int:
+    """
+    Calculate how many highlight moments to fetch based on requested reel duration.
+    Uses estimate for initial fetch, then actual durations for final selection.
+    """
+    effective_per_clip = ReelConfig.AVG_MOMENT_DURATION_SEC + ReelConfig.TRANSITION_DURATION_SEC
+    base_chunks = int(requested_duration_sec / effective_per_clip)
+
+    # Fetch extra to allow ranking/filtering
+    return max(ReelConfig.MIN_MOMENTS, int(base_chunks * ReelConfig.FETCH_MULTIPLIER))
+
+def select_clips_for_duration(ranked_clips: list, target_duration_sec: int) -> list:
+    """
+    Select clips using ACTUAL durations from TwelveLabs results.
+    """
+    selected = []
+    total_duration = 0
+
+    for clip in ranked_clips:
+        actual_duration = clip.end - clip.start  # Real duration from search results
+        if total_duration + actual_duration <= target_duration_sec:
+            selected.append(clip)
+            total_duration += actual_duration
+
+    return selected, total_duration
+
+# Examples (with default config):
+# "30 second reel" → fetch ~14 candidates, select ~8 using actual durations
+# "1 minute highlight" → fetch ~26 candidates, select ~15
+# "15 second teaser" → fetch ~7 candidates, select ~4
+```
 
 ### Implementation with Embeddings
 ```python
@@ -1066,6 +1103,18 @@ class VideoConfig:
     MUSIC_FADE_OUT_SEC = 3
     MUSIC_DUCK_SPEECH_VOLUME = 0.2  # 20% during speech
     MUSIC_BOOST_ACTION_VOLUME = 1.2  # 120% during highlights
+
+class ReelConfig:
+    # Duration → Chunk Calculation
+    AVG_MOMENT_DURATION_SEC = 3.5    # Estimate for initial fetch count
+    TRANSITION_DURATION_SEC = 0.5    # Crossfade time between clips
+    FETCH_MULTIPLIER = 1.75          # Fetch extra for ranking quality
+    MIN_MOMENTS = 3                  # Minimum clips in any reel
+    DEFAULT_DURATION_SEC = 30        # Default reel length if not specified
+
+    # Vibe Ranking Weights
+    VIBE_WEIGHT = 0.6                # Weight for embedding similarity
+    TEXT_MATCH_WEIGHT = 0.4          # Weight for TwelveLabs text confidence
 
 SWITCHING_PROFILES = {
     "sports": {"ad_block_scenes": ["scoring_play"], "ad_boost_scenes": ["timeout"]},
