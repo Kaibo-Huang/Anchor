@@ -84,7 +84,7 @@ docker run -d -p 6379:6379 redis:alpine
 
 ## Architecture
 ```
-Upload up to 12 videos → S3 → TwelveLabs analysis → Audio sync (metadata + fingerprint)
+Upload up to 12 videos → S3 → Audio sync (metadata + fingerprint) → TwelveLabs analysis 
     ↓
 Feature 1: Multi-angle switching (best angle per moment)
     ↓
