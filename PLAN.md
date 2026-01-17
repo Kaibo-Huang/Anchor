@@ -168,7 +168,10 @@ def audio_fingerprint_sync(videos, rough_offsets):
     return offsets
 ```
 
-**3. TwelveLabs Analysis (Parallelized for 12 Videos)**
+**3. TwelveLabs Analysis + Chapter Generation (Parallelized for 12 Videos)**
+
+All TwelveLabs work happens upfront: video analysis, scene classification, and chapter generation.
+
 ```python
 import asyncio
 
@@ -186,6 +189,55 @@ analyses = asyncio.run(wait_for_all_analyses())
 
 # Returns per 2-3 sec: scene classification, objects, audio events, action intensity (1-10)
 # Cache results aggressively to avoid re-analysis on timeline regeneration
+```
+
+**Chapter Generation (from TwelveLabs data)**
+
+Auto-generate YouTube-compatible chapter timestamps from scene classification + transcription:
+
+```python
+def generate_chapters(video_analysis, timeline):
+    """
+    Generate YouTube-compatible chapter timestamps.
+    Based on YouTube Chapter Highlight Generator approach.
+    """
+    chapters = []
+
+    for segment in timeline:
+        # Use TwelveLabs scene classification + transcription
+        chapter_title = determine_chapter_title(
+            segment,
+            video_analysis.scenes,
+            video_analysis.transcription
+        )
+
+        timestamp = ms_to_timestamp(segment["start_ms"])
+        chapters.append(f"{timestamp} {chapter_title}")
+
+    return "\n".join(chapters)
+
+def ms_to_timestamp(ms):
+    """Convert milliseconds to YouTube timestamp format (MM:SS or HH:MM:SS)."""
+    seconds = ms // 1000
+    minutes = seconds // 60
+    hours = minutes // 60
+
+    if hours > 0:
+        return f"{hours}:{minutes % 60:02d}:{seconds % 60:02d}"
+    return f"{minutes}:{seconds % 60:02d}"
+
+def determine_chapter_title(segment, scenes, transcription):
+    """Determine chapter title from scene context and speech."""
+    # Priority: explicit speech mention > scene classification > generic
+    if segment.get("text"):
+        return extract_key_phrase(segment["text"])
+
+    if scenes:
+        scene = find_scene_at(scenes, segment["start_ms"])
+        if scene:
+            return scene.classification
+
+    return f"Segment {segment.get('index', 0) + 1}"
 ```
 
 **4. User Instructions Integration**
@@ -379,59 +431,6 @@ ffmpeg -i input.mp4 -ss START -t DURATION -c copy clip.mp4
 
 # Concat with crossfade (0.5 sec)
 ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex "xfade=transition=fade:duration=0.5" output.mp4
-```
-
-**9. Chapter Generation**
-
-Use YouTube Chapter Highlight Generator approach to auto-generate chapter timestamps:
-- Analyze video content to identify key segments
-- Create timestamps for better video navigation
-- Output in YouTube-compatible chapter format
-
-```python
-def generate_chapters(video_analysis, timeline):
-    """
-    Generate YouTube-compatible chapter timestamps.
-    Based on YouTube Chapter Highlight Generator approach.
-    """
-    chapters = []
-    
-    for segment in timeline:
-        # Use TwelveLabs scene classification + transcription
-        chapter_title = determine_chapter_title(
-            segment, 
-            video_analysis.scenes,
-            video_analysis.transcription
-        )
-        
-        timestamp = ms_to_timestamp(segment["start_ms"])
-        chapters.append(f"{timestamp} {chapter_title}")
-    
-    return "\n".join(chapters)
-
-def ms_to_timestamp(ms):
-    """Convert milliseconds to YouTube timestamp format (MM:SS or HH:MM:SS)."""
-    seconds = ms // 1000
-    minutes = seconds // 60
-    hours = minutes // 60
-    
-    if hours > 0:
-        return f"{hours}:{minutes % 60:02d}:{seconds % 60:02d}"
-    return f"{minutes}:{seconds % 60:02d}"
-
-def determine_chapter_title(segment, scenes, transcription):
-    """Determine chapter title from scene context and speech."""
-    # Priority: explicit speech mention > scene classification > generic
-    if segment.get("text"):
-        # Extract key phrase from transcription
-        return extract_key_phrase(segment["text"])
-    
-    if scenes:
-        scene = find_scene_at(scenes, segment["start_ms"])
-        if scene:
-            return scene.classification
-    
-    return f"Segment {segment.get('index', 0) + 1}"
 ```
 
 ---
