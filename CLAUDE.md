@@ -123,26 +123,42 @@ cx, cy = bbox center; crop to frame_size/zoom centered on (cx, cy)
 
 ## FEATURE 3: Brand Integration (Shopify + Veo)
 
-**Goal:** Insert Shopify product ads into low-action moments. Veo generates animated product videos.
+**Goal:** Replace video segments with AI-generated Shopify product ads using seamless transitions (TV commercial break experience).
 
-### Ad Slot Detection
-Find timestamps where action_intensity < 3 AND audio = "timeout/pause/transition"
+**Approach:** Native video replacement at natural transition points (PRIMARY)
+**Fallback:** Simple overlay if time-constrained
 
-### Shopify Products
+### Ad Slot Detection (Multi-Factor Scoring)
+- Score each timestamp 0-100 (action intensity 40pts, audio 25pts, transitions 20pts, visual complexity 15pts)
+- Constraints: min 45s spacing, max 1 ad per 4 min, no ads in first/last 10s
+- Penalties: nearby key moments (-70%), active speech (-50%), high crowd energy (-60%)
+- Event rules: never interrupt scoring plays, name announcements, solos
+- Result: 3-4 optimal placements
+
+### Native Integration Pipeline
+1. **Find transition points:** Scene boundaries, camera pans, angle switches
+2. **Generate Veo video with motion matching:** Match pan direction or zoom for seamless blending
+3. **Match visual style:** Color-grade Veo video to match event footage (brightness, saturation, color temp)
+4. **Insert with FFmpeg xfade:** Cut event → crossfade (0.5s) → product video (3.5s) → crossfade → resume event
+5. **Blend audio:** Crossfade event audio down/up around product video
+
 ```python
-r = await client.get(f"{store_url}/admin/api/2024-01/products.json", headers={"X-Shopify-Access-Token": token})
-# Extract: id, title, price, image, checkout_url
-```
-
-### Veo Product Video Generation
-```python
+# Generate motion-matched Veo video
 operation = client.models.generate_videos(
     model="veo-3.1-fast-preview",
-    prompt=f"Product showcase, {product_name} rotating slowly, clean white background, studio lighting",
-    image=product_image_data
+    prompt=f"Product showcase, {product.name}, camera panning right" if transition == "pan" else "rotating",
+    image=product.image_data,
+    duration=3.5
 )
-# Poll until done, get video URI
+
+# Insert with crossfade transition
+ffmpeg -i before.mp4 -i product.mp4 -i after.mp4 \
+  -filter_complex "[0][1]xfade=duration=0.5[v1];[v1][2]xfade=duration=0.5[v]" \
+  output.mp4
 ```
+
+### Sponsor Power Plays
+Lower-third overlays for key moments: "{sponsor} GOAL CAM!", "{sponsor} Play of the Game"
 
 ### Sponsor Power Plays
 ```python
@@ -163,16 +179,30 @@ TEMPLATES = {
 
 ---
 
-## FEATURE 4: Personal Reels (Stretch)
+## FEATURE 4: On-Demand Highlight Reels (Stretch)
 
-**Goal:** Individual highlight video for each person (e.g., each graduate).
+**Goal:** User requests custom highlight reel with natural language query.
 
-1. **TwelveLabs face clustering** → group same person across angles
-2. **Match to roster** if provided (name + ref image)
-3. **Extract moments** where person is visible, in focus, meaningful
-4. **Build 30s timeline** ranked by importance
-5. **Add personalization:** title card, lower-third name
-6. **Batch generate** with Celery, email links to individuals
+**Examples:** "player 23", "guy in yellow pants", "the goalie", "person who scored first"
+
+### Flow
+1. **User submits query** via API/UI
+2. **TwelveLabs natural language search** → finds matching moments
+3. **Filter and rank** moments by importance/confidence
+4. **Build 30s timeline** from top moments
+5. **Render with FFmpeg** → add title card, concatenate clips with crossfades
+6. **Return S3 URL** instantly
+
+```python
+# API call
+POST /api/events/:id/reels/generate
+Body: { "query": "player 23", "duration": 30 }
+
+# Returns
+{ "reel_url": "https://s3.../reel.mp4", "moments_count": 8 }
+```
+
+**Benefits:** On-demand (no batch processing), handles any natural language query, instant results using existing TwelveLabs index.
 
 ---
 
@@ -181,19 +211,53 @@ TEMPLATES = {
 events (id, user_id, name, event_type, status, shopify_store_url, sponsor_name, master_video_url)
 videos (id, event_id, original_url, angle_type, sync_offset_ms, analysis_data JSONB, status)
 timelines (id, event_id, segments JSONB, zooms JSONB, ad_slots JSONB, chapters JSONB)
-personal_reels (id, event_id, person_name, person_email, output_url, status)
+custom_reels (id, event_id, query TEXT, output_url, moments JSONB, duration_sec INT, created_at)
 ```
 
 ## API Endpoints
 ```
-POST /api/events              Create event
-POST /api/events/:id/videos   Get presigned S3 URL
-POST /api/events/:id/analyze  Start TwelveLabs analysis
-POST /api/events/:id/generate Generate final video
-POST /api/events/:id/shopify  Connect Shopify store
-POST /api/events/:id/sponsor  Set sponsor power plays
-GET  /api/events/:id/chapters Get YouTube timestamps
+POST /api/events                     Create event
+POST /api/events/:id/videos          Get presigned S3 URL
+POST /api/events/:id/analyze         Start TwelveLabs analysis
+POST /api/events/:id/generate        Generate final video
+POST /api/events/:id/shopify         Connect Shopify store
+POST /api/events/:id/sponsor         Set sponsor power plays
+GET  /api/events/:id/chapters        Get YouTube timestamps
+POST /api/events/:id/reels/generate  Generate custom highlight reel from query
 ```
+
+## Configuration Management
+
+**Use config files for tunable thresholds** instead of hardcoding values.
+
+Create `backend/config.py` with:
+```python
+class VideoConfig:
+    # Ad Detection
+    AD_SCORE_THRESHOLD = 70
+    AD_MIN_SPACING_MS = 45000
+    AD_MAX_PER_4MIN = 1
+    AD_WEIGHT_ACTION = 40
+    AD_WEIGHT_AUDIO = 25
+    AD_PENALTY_KEY_MOMENT = 0.3
+    AD_PENALTY_SPEECH = 0.5
+
+    # Zoom
+    ZOOM_MIN_ACTION = 8
+    ZOOM_MIN_SPACING_SEC = 10
+    ZOOM_FACTOR_HIGH = 2.5
+    ZOOM_FACTOR_MED = 1.8
+
+    # Angle Switching
+    MIN_ANGLE_DURATION_MS = 4000
+
+SWITCHING_PROFILES = {
+    "sports": {"ad_block_scenes": ["scoring_play"], "ad_boost_scenes": ["timeout"]},
+    "ceremony": {"ad_block_scenes": ["name_announcement"], "ad_boost_scenes": ["pause"]}
+}
+```
+
+**Benefits:** Easy tuning during demo without code changes, event-specific customization.
 
 ## Environment Variables
 ```
@@ -221,10 +285,12 @@ anchor/
 2. TwelveLabs analysis (parallel)
 3. Generate angle-switching timeline
 4. Identify zoom moments
-5. Find ad slots + Veo product videos
-6. Add sponsor power plays
-7. Generate chapters
-8. FFmpeg render → S3
+5. Find ad slots (multi-factor scoring) + identify transition points
+6. Generate Veo product videos (motion-matched) + color-grade to match footage
+7. Insert product videos with seamless transitions (native replacement)
+8. Add sponsor power plays (overlays)
+9. Generate chapters
+10. FFmpeg render → S3
 
 ## Docker (Post-Hackathon)
 Services: frontend (Next.js), backend (FastAPI), celery (workers), redis, postgres
@@ -237,9 +303,10 @@ One-command: `docker-compose up --build`
 Hours 0-4:   Setup (repos, Supabase, S3, API keys)
 Hours 4-12:  Feature 1 (multi-angle switching)
 Hours 12-20: Feature 2 (auto-zoom)
-Hours 20-28: Feature 3 (Shopify + Veo + sponsor power plays)
+Hours 20-28: Feature 3 (Native ad integration: Veo + seamless transitions)
 Hours 28-36: Polish, demo, pitch
-Stretch:     Feature 4, native ads, Veo replays
+Fallback:    Simple overlay if native integration too complex
+Stretch:     Feature 4 (personal reels)
 ```
 
 **Target Prizes:** TwelveLabs (full API), Shopify (shoppable video), Gemini (Veo generation), Top 3 Overall

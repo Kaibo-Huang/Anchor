@@ -481,17 +481,166 @@ ffmpeg -i input.mp4 -vf "zoompan=z='min(zoom+0.001,1.5)':d=90:x='iw/2-(iw/zoom/2
 
 ## FEATURE 3: Native Brand Integration (Shopify + Veo)
 
-**What:** Insert Shopify product ads into low-action moments. Use Google Veo to generate animated product videos from static images.
+**What:** Replace video segments with AI-generated Shopify product ads at natural transition points (TV commercial break experience).
 
-### 3A: Dynamic Banner Overlays (MVP)
+**Approach:** Native Content Integration (seamless video replacement with crossfade transitions)
 
-**1. Find Ad Slots**
+**Fallback:** If time-constrained, use simple overlay approach (see section 3D)
+
+---
+
+### Implementation: Native Video Replacement
+
+**1. Find Ad Slots (Enhanced Multi-Factor Scoring)**
+
+Use intelligent scoring instead of simple threshold to prevent ad fatigue:
+
 ```python
-# TwelveLabs: action_intensity < 3, audio = "break/whistle/pause"
-ad_slots = [ts for ts in analysis if ts.action_intensity < 3 and ts.audio in ["timeout", "pause", "transition"]]
+def calculate_ad_suitability_score(ts_analysis, context):
+    """Score 0-100: higher = better placement. Only 70+ considered."""
+    score = 0
+
+    # Factor 1: Action Intensity (40 pts max)
+    if ts_analysis.action_intensity <= 2:
+        score += 40
+    elif ts_analysis.action_intensity <= 3:
+        score += 25
+    elif ts_analysis.action_intensity <= 4:
+        score += 10
+
+    # Factor 2: Audio Context (25 pts max)
+    IDEAL_AUDIO = {"timeout": 25, "halftime": 25, "pause": 25,
+                   "transition": 20, "break": 25, "whistle": 15}
+    audio_score = max([IDEAL_AUDIO.get(e, 0) for e in ts_analysis.audio_events], default=0)
+    score += audio_score
+
+    # Factor 3: Scene Transition (20 pts max)
+    if ts_analysis.is_scene_boundary:
+        score += 20
+    elif ts_analysis.is_camera_switch:
+        score += 15
+
+    # Factor 4: Visual Complexity (15 pts max - lower is better)
+    if ts_analysis.visual_complexity < 0.3:
+        score += 15
+    elif ts_analysis.visual_complexity < 0.5:
+        score += 10
+
+    # PENALTIES
+
+    # Hard block if ad within 45 seconds
+    time_since_last_ad = ts_analysis.timestamp_ms - context.last_ad_timestamp
+    if time_since_last_ad < 45000:
+        return 0
+
+    # Penalty for nearby key moments (goals, scores)
+    if any(abs(ts_analysis.timestamp_ms - km.timestamp) < 8000
+           for km in context.key_moments):
+        score *= 0.3
+
+    # Penalty for active speech (engaging content)
+    if ts_analysis.has_active_speech:
+        score *= 0.5
+
+    # Penalty for high crowd energy
+    if ts_analysis.crowd_energy > 0.7:
+        score *= 0.4
+
+    return score
+
+def select_optimal_ad_slots(timeline_analysis, event_type, duration_ms):
+    """Select best N ad slots with constraints."""
+    # Dynamic max ads: 1 per 4 minutes (max 8 total)
+    max_ads = min(int(duration_ms / 240000), 8)
+    if duration_ms < 120000:  # <2 min
+        max_ads = 1
+
+    # Score all candidates
+    context = {"last_ad_timestamp": -999999,
+               "key_moments": [m for m in timeline_analysis
+                              if m.action_intensity >= 8 or
+                              m.scene_classification in ["goal", "score", "name_called"]]}
+
+    candidates = []
+    for ts in timeline_analysis:
+        score = calculate_ad_suitability_score(ts, context)
+
+        # Event-specific adjustments
+        if event_type == "sports":
+            if ts.scene_classification in ["scoring_play", "fast_break"]:
+                score = 0  # Hard block
+            elif ts.scene_classification in ["timeout", "halftime"]:
+                score *= 1.5
+
+        if score >= 70:
+            candidates.append({"timestamp_ms": ts.timestamp_ms,
+                             "score": score, "duration_ms": 4000})
+
+    # Greedy selection with spacing
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    selected = []
+
+    for c in candidates:
+        # Check 45s spacing + not in first/last 10s
+        if (c["timestamp_ms"] > 10000 and
+            c["timestamp_ms"] < duration_ms - 10000 and
+            all(abs(c["timestamp_ms"] - s["timestamp_ms"]) >= 45000 for s in selected)):
+
+            selected.append(c)
+            if len(selected) >= max_ads:
+                break
+
+    return sorted(selected, key=lambda x: x["timestamp_ms"])
 ```
 
-**2. Fetch Shopify Products**
+**Result:** 3-4 carefully selected ads instead of 20-30 intrusive placements.
+
+---
+
+**2. Find Natural Transition Points**
+```python
+def find_transition_opportunities(timeline_analysis, ad_slots):
+    """Find moments where we can cleanly cut to product video."""
+    opportunities = []
+
+    for slot in ad_slots:
+        ts = slot["timestamp_ms"]
+        analysis = get_analysis_at_timestamp(timeline_analysis, ts)
+
+        # Priority 1: Scene boundaries (fade to black, cuts)
+        if analysis.is_scene_boundary:
+            opportunities.append({
+                "timestamp_ms": ts,
+                "type": "scene_cut",
+                "transition": "crossfade",
+                "duration": 500,  # 0.5s transition
+                "confidence": 0.95
+            })
+
+        # Priority 2: Camera pans/movements
+        elif analysis.camera_movement in ["pan_left", "pan_right", "zoom_out"]:
+            opportunities.append({
+                "timestamp_ms": ts,
+                "type": "camera_pan",
+                "transition": "continue_motion",  # Match pan direction
+                "duration": 800,
+                "confidence": 0.85
+            })
+
+        # Priority 3: Angle switches (already cutting between cameras)
+        elif analysis.is_angle_switch:
+            opportunities.append({
+                "timestamp_ms": ts,
+                "type": "angle_switch",
+                "transition": "cut",  # Hard cut already happening
+                "duration": 0,
+                "confidence": 0.90
+            })
+
+    return opportunities
+```
+
+**3. Fetch Shopify Products**
 ```python
 import httpx
 
@@ -510,31 +659,162 @@ async def get_products(store_url, access_token):
         } for p in r.json()["products"]]
 ```
 
-**3. Generate Product Video with Veo** ⭐ (Differentiator)
+**4. Generate Product Video with Veo (Motion-Matched)** ⭐ (Differentiator)
 ```python
 from google import genai
 
-async def generate_product_video(product_image_url, product_name):
+async def generate_product_video_with_motion(product, transition_type):
+    """Generate Veo video that matches the transition style for seamless integration."""
     client = genai.Client(api_key=GOOGLE_API_KEY)
-    
+
     # Download product image
-    image_data = await download_image(product_image_url)
-    
-    # Generate 3-sec animated product video
+    image_data = await download_image(product.image_url)
+
+    # Base prompt
+    base_prompt = f"Product showcase, {product.name}, studio lighting, commercial quality"
+
+    # Add motion matching for seamless transition
+    if transition_type == "camera_pan":
+        prompt = f"{base_prompt}, camera slowly panning right, smooth motion"
+    elif transition_type == "zoom_out":
+        prompt = f"{base_prompt}, camera pulling back reveal shot"
+    elif transition_type == "scene_cut":
+        prompt = f"{base_prompt}, static shot, clean fade in"
+    else:
+        prompt = f"{base_prompt}, product rotating slowly"
+
+    # Generate 3.5-second video
     operation = client.models.generate_videos(
-        model="veo-3.1-fast-preview",  # Fast + cheaper
-        prompt=f"Product showcase, {product_name} rotating slowly, clean white background, studio lighting, commercial quality",
+        model="veo-3.1-fast-preview",
+        prompt=prompt,
         image=image_data,
+        duration=3.5,
     )
-    
+
     while not operation.done:
         await asyncio.sleep(3)
         operation = client.operations.get(operation)
-    
+
     return operation.result.videos[0].uri
 ```
 
-**4. Sponsor Power Plays** ⭐ (New Feature)
+**5. Match Visual Style (Color Grading)**
+```python
+def match_visual_style(veo_video_path, event_footage_sample):
+    """Apply color grading to Veo video to match event footage for seamless integration."""
+
+    # Analyze event footage color profile
+    avg_brightness = analyze_brightness(event_footage_sample)
+    color_temp = analyze_color_temperature(event_footage_sample)
+    saturation = analyze_saturation(event_footage_sample)
+
+    # Apply matching LUT to Veo video
+    subprocess.run([
+        "ffmpeg", "-i", veo_video_path,
+        "-vf", f"eq=brightness={avg_brightness}:saturation={saturation},colortemperature={color_temp}",
+        "matched_veo.mp4"
+    ])
+
+    return "matched_veo.mp4"
+```
+
+**6. Insert Product Video with Seamless Transitions**
+```python
+def insert_product_video(event_clip, product_video, insert_point_ms, transition):
+    """
+    Cut event footage, insert product video, rejoin with transitions.
+    Timeline: [Event Part 1] → [Transition] → [Product] → [Transition] → [Event Part 2]
+    """
+
+    before_clip = f"before_{insert_point_ms}.mp4"
+    after_clip = f"after_{insert_point_ms}.mp4"
+    product_duration = 3500  # 3.5 seconds
+
+    # Cut event footage into before/after segments
+    cut_before = insert_point_ms - transition["duration"]
+    subprocess.run([
+        "ffmpeg", "-i", event_clip,
+        "-ss", "0", "-to", f"{cut_before}ms",
+        "-c", "copy", before_clip
+    ])
+
+    cut_after = insert_point_ms + product_duration + transition["duration"]
+    subprocess.run([
+        "ffmpeg", "-i", event_clip,
+        "-ss", f"{cut_after}ms",
+        "-c", "copy", after_clip
+    ])
+
+    # Create transition based on type
+    if transition["type"] == "crossfade":
+        subprocess.run([
+            "ffmpeg",
+            "-i", before_clip,
+            "-i", product_video,
+            "-i", after_clip,
+            "-filter_complex",
+            f"[0][1]xfade=transition=fade:duration={transition['duration']/1000}:offset={get_duration(before_clip)-0.5}[v1];"
+            f"[v1][2]xfade=transition=fade:duration={transition['duration']/1000}:offset={get_duration(before_clip)+3.5-0.5}[v]",
+            "-map", "[v]",
+            "output_with_ad.mp4"
+        ])
+    elif transition["type"] == "cut":
+        # Hard cut (no transition) - simplest
+        with open("concat_list.txt", "w") as f:
+            f.write(f"file '{before_clip}'\nfile '{product_video}'\nfile '{after_clip}'\n")
+        subprocess.run([
+            "ffmpeg", "-f", "concat", "-safe", "0",
+            "-i", "concat_list.txt", "-c", "copy", "output_with_ad.mp4"
+        ])
+
+    return "output_with_ad.mp4"
+```
+
+**7. Complete Integration Pipeline**
+```python
+async def integrate_product_ads_natively(event_video, timeline_analysis, shopify_products):
+    """Full pipeline for native ad integration (TV commercial break style)."""
+
+    # 1. Find optimal ad slots
+    ad_slots = select_optimal_ad_slots(timeline_analysis, event_type, duration_ms)
+
+    # 2. Find best transition opportunities
+    opportunities = find_transition_opportunities(timeline_analysis, ad_slots)
+
+    # 3. Generate Veo videos with matching motion
+    product_videos = []
+    for opp in opportunities[:3]:  # Top 3 slots
+        product = random.choice(shopify_products)
+        veo_video = await generate_product_video_with_motion(product, opp["type"])
+
+        # Match visual style to event footage
+        sample = extract_sample(event_video, opp["timestamp_ms"])
+        styled_video = match_visual_style(veo_video, sample)
+
+        product_videos.append({
+            "video": styled_video,
+            "insert_point": opp["timestamp_ms"],
+            "transition": opp
+        })
+
+    # 4. Insert all product videos sequentially
+    current_video = event_video
+    for pv in sorted(product_videos, key=lambda x: x["insert_point"]):
+        current_video = insert_product_video(
+            current_video,
+            pv["video"],
+            pv["insert_point"],
+            pv["transition"]
+        )
+
+    return current_video
+```
+
+**Result:** Product ads feel like TV commercial breaks - seamless transitions that viewers expect and accept.
+
+---
+
+**8. Sponsor Power Plays** ⭐ (Bonus Feature)
 
 Branded moment highlights sponsored by local businesses:
 
@@ -579,9 +859,27 @@ def create_sponsor_overlay(moment_type, sponsor_name, event_type="sports"):
 ffmpeg -i main.mp4 -i banner.png -filter_complex "overlay=x=100:y=H-200:enable='between(t,45,49)'" output.mp4
 ```
 
-### 3B: Smart Contextual Placement
+---
 
-**What:** Intelligently place ads in the 3D scene without covering important content (like pro sports broadcasts).
+### 3D: Fallback Options (If Time-Constrained)
+
+If native integration (above) is too complex for hackathon timeline, use these simpler overlay approaches:
+
+#### Option 1: Simple Banner Overlays
+- Veo product video plays as overlay in corner
+- FFmpeg overlay filter with fade in/out
+- Fastest implementation (2-3 hours)
+- Less immersive but functional
+
+```bash
+ffmpeg -i event.mp4 -i product_veo.mp4 \
+  -filter_complex "overlay=x=W-w-50:y=H-h-50:enable='between(t,45,49)'" \
+  output.mp4
+```
+
+#### Option 2: Smart Contextual Placement
+
+**What:** Same overlay, but intelligently positioned to avoid covering important content.
 
 **1. Detect Scene Objects**
 ```python
@@ -692,93 +990,180 @@ ffmpeg -i main.mp4 -i banner.png -filter_complex "overlay=x='W-w-50':y='H-h-100'
 ffmpeg -i main.mp4 -i banner.png -filter_complex "perspective=x0=0:y0=0:x1=W:y1=20:x2=0:y2=H:x3=W:y3=H-20[warped]; [0][warped]overlay=x=100:y=200" output.mp4
 ```
 
-### 3C: Native Content Integration (Advanced)
-
-**1. Find Natural Cut Points**
-- Camera pans (insert mid-pan)
-- Scene transitions (fade to black)
-- Wide→closeup switches
-
-**2. Match Visual Style**
-- Analyze color grading, lighting, camera movement
-- Apply matching filters to Veo-generated ad
-
-**3. Seamless Insertion**
-```
-Event footage → ball out of bounds → camera pans →
-MID-PAN: transition to Veo product video (matching pan motion) →
-2.5 sec product showcase →
-Pan completes → back to game footage
-```
-
-**4. Audio Blending**
-- Crossfade event audio down (0.3s)
-- Veo generates native audio OR add subtle music
-- Crossfade event audio back (0.3s)
-
-**5. Contextual Matching**
-```python
-CONTEXT_ADS = {
-    "player_drinking": "sports_drink",
-    "crowd_dancing": "tickets",
-    "graduation": "alumni_merch",
-}
-```
-
 ---
 
-## FEATURE 4: Personalized Highlight Reels (Stretch)
+## FEATURE 4: On-Demand Highlight Reels (Stretch)
 
-**What:** Generate individual videos for each person (e.g., each graduate gets their own reel).
+**What:** User requests custom highlight reel with natural language: "generate highlight reel for player 23" or "make a reel of the guy in yellow pants"
+
+**Approach:** Natural language → TwelveLabs search → extract moments → generate reel on demand
 
 ### Implementation
 
-**1. Person Identification**
+**1. Natural Language Query Processing**
 ```python
-# TwelveLabs face detection + clustering
-faces = client.search.query(index_id, "faces", ["visual"])
-clusters = cluster_faces(faces)  # Group same person
+async def generate_custom_reel(event_id: str, user_query: str):
+    """
+    Examples:
+    - "player 23" → search for jersey number
+    - "guy in yellow pants" → search for clothing color
+    - "the goalie" → search for position/role
+    - "person who scored the first goal" → search for action + temporal
+    """
 
-# Match to roster if provided
-roster = [{"name": "John Smith", "ref_image": "john.jpg"}, ...]
-for cluster in clusters:
-    cluster.identity = match_to_roster(cluster.representative, roster)
+    # Use TwelveLabs natural language search
+    client = TwelveLabs(api_key=TWELVELABS_API_KEY)
+    index_id = get_event_index_id(event_id)
+
+    # Search for moments matching the query
+    search_results = client.search.query(
+        index_id=index_id,
+        query_text=user_query,
+        search_options=["visual", "conversation"],
+        threshold="high"
+    )
+
+    return search_results
 ```
 
-**2. Extract Moments**
-- Find all timestamps where person appears
-- Filter: face visible, in focus, meaningful (not background)
-- Rank by importance
-
-**3. Build Personal Timeline**
+**2. Extract and Rank Moments**
 ```python
-def create_personal_reel(person_id, appearances, target_duration=30):
-    moments = sorted(appearances, key=lambda x: x.importance, reverse=True)
+def filter_moments(search_results, min_confidence=0.6):
+    """Extract clips where the person/object appears clearly."""
+    moments = []
+
+    for result in search_results:
+        # Filter for quality: person in focus, well-lit, not just background
+        if result.confidence >= min_confidence:
+            moments.append({
+                "video_id": result.video_id,
+                "start_ms": result.start,
+                "end_ms": result.end,
+                "confidence": result.confidence,
+                "description": result.metadata.get("description", ""),
+                "importance": calculate_moment_importance(result)
+            })
+
+    # Rank by importance (key moments > background appearances)
+    return sorted(moments, key=lambda x: x["importance"], reverse=True)
+```
+
+**3. Build Highlight Reel Timeline**
+```python
+def create_reel_timeline(moments, target_duration_sec=30):
+    """Select best moments that fit within target duration."""
     timeline = []
-    total = 0
-    
-    for m in moments:
-        if total + m.duration <= target_duration:
-            timeline.append(m)
-            total += m.duration
-    
-    return sorted(timeline, key=lambda x: x.timestamp)
+    total_duration = 0
+
+    for moment in moments:
+        clip_duration = (moment["end_ms"] - moment["start_ms"]) / 1000
+
+        # Trim long clips to 5 seconds max
+        if clip_duration > 5:
+            moment["end_ms"] = moment["start_ms"] + 5000
+            clip_duration = 5
+
+        if total_duration + clip_duration <= target_duration_sec:
+            timeline.append(moment)
+            total_duration += clip_duration
+
+        if total_duration >= target_duration_sec:
+            break
+
+    # Sort chronologically for coherent narrative
+    return sorted(timeline, key=lambda x: x["start_ms"])
 ```
 
-**4. Personalization**
-- Title card: "John Smith - Class of 2025"
-- Lower-third name during key moments
-- Background music (optional)
-
-**5. Batch Generation**
+**4. Render Custom Reel**
 ```python
-async def generate_all_reels(event_id, persons):
-    tasks = [generate_reel(event_id, p) for p in persons]
-    results = await asyncio.gather(*tasks)
+async def render_custom_reel(event_id: str, timeline: list, user_query: str):
+    """Generate video from selected moments."""
+    clips = []
 
-    for person, url in zip(persons, results):
-        await send_email(person.email, url)
+    # Extract clips
+    for moment in timeline:
+        video_path = get_video_path(event_id, moment["video_id"])
+        clip_path = f"clip_{moment['start_ms']}.mp4"
+
+        subprocess.run([
+            "ffmpeg", "-i", video_path,
+            "-ss", f"{moment['start_ms']/1000}",
+            "-to", f"{moment['end_ms']/1000}",
+            "-c:v", "libx264", "-preset", "fast",
+            clip_path
+        ])
+        clips.append(clip_path)
+
+    # Add title card with query
+    title_card = create_title_card(f"Highlight Reel: {user_query}")
+    clips.insert(0, title_card)
+
+    # Concatenate with crossfade transitions
+    output = concat_with_transitions(clips, transition="fade", duration=0.3)
+
+    # Upload to S3
+    s3_url = upload_to_s3(output, f"reels/{event_id}/{uuid.uuid4()}.mp4")
+
+    return s3_url
 ```
+
+**5. API Endpoint**
+```python
+@router.post("/api/events/{event_id}/reels/generate")
+async def generate_custom_highlight_reel(
+    event_id: str,
+    request: CustomReelRequest  # { "query": "player 23", "duration": 30 }
+):
+    # Search for matching moments
+    search_results = await generate_custom_reel(event_id, request.query)
+
+    # Filter and rank
+    moments = filter_moments(search_results)
+
+    if not moments:
+        raise HTTPException(404, "No moments found matching query")
+
+    # Build timeline
+    timeline = create_reel_timeline(moments, request.duration or 30)
+
+    # Render video
+    video_url = await render_custom_reel(event_id, timeline, request.query)
+
+    return {"reel_url": video_url, "moments_count": len(timeline)}
+```
+
+**6. Example Usage**
+```bash
+# User requests in UI or API
+POST /api/events/abc123/reels/generate
+{
+  "query": "player 23",
+  "duration": 30
+}
+
+# Returns
+{
+  "reel_url": "https://s3.../reels/abc123/xyz.mp4",
+  "moments_count": 8
+}
+```
+
+### Supported Query Types
+
+| Query Example | TwelveLabs Search Strategy |
+|---------------|----------------------------|
+| "player 23" | Visual search for jersey number |
+| "guy in yellow pants" | Visual search for clothing color |
+| "the goalie" | Visual + conversation search for role |
+| "person who scored first" | Visual search for action + temporal filter |
+| "tallest player" | Visual search for person attributes |
+| "John Smith" | Conversation search (if name mentioned) + face search (if roster provided) |
+
+### Benefits Over Batch Generation
+- **On-demand:** Only generate when user requests (saves processing time)
+- **Flexible:** Handles any natural language query without pre-defined roster
+- **Instant:** Uses TwelveLabs search (already indexed) instead of re-processing
+- **Scalable:** No need to generate hundreds of reels upfront
 
 ---
 
@@ -787,7 +1172,7 @@ async def generate_all_reels(event_id, persons):
 events (id, user_id, name, event_type, status, shopify_store_url, sponsor_name, master_video_url, created_at)
 videos (id, event_id, original_url, angle_type, sync_offset_ms, user_instructions TEXT, user_context JSONB, analysis_data JSONB, status)
 timelines (id, event_id, segments JSONB, zooms JSONB, ad_slots JSONB, chapters JSONB)
-personal_reels (id, event_id, person_name, person_email, moments JSONB, output_url, status)
+custom_reels (id, event_id, query TEXT, output_url, moments JSONB, duration_sec INT, created_at)
 
 -- user_context JSONB example:
 -- {
@@ -795,6 +1180,12 @@ personal_reels (id, event_id, person_name, person_email, moments JSONB, output_u
 --   "highlight_preferences": ["focus on #23", "zoom at 2:34"],
 --   "manual_markers": [{"timestamp_ms": 154000, "note": "goal"}]
 -- }
+
+-- custom_reels.moments JSONB example:
+-- [
+--   {"video_id": "abc", "start_ms": 5000, "end_ms": 8000, "confidence": 0.92},
+--   {"video_id": "def", "start_ms": 15000, "end_ms": 19000, "confidence": 0.88}
+-- ]
 ```
 
 ## API Endpoints
@@ -809,7 +1200,7 @@ GET    /api/events/:id/status           Processing status
 POST   /api/events/:id/shopify          Connect Shopify store
 POST   /api/events/:id/sponsor          Set sponsor for power plays
 GET    /api/events/:id/chapters         Get generated chapter timestamps
-POST   /api/events/:id/reels            Generate personal reels (stretch)
+POST   /api/events/:id/reels/generate   Generate custom highlight reel from natural language query (stretch)
 
 # Example: Update video with user instructions
 PATCH /api/events/123/videos/456
@@ -817,7 +1208,143 @@ PATCH /api/events/123/videos/456
   "instructions": "Wide angle from bleachers. Focus on #23. Zoom at 2:34 when goal happens.",
   "angle_description": "wide"
 }
+
+# Example: Generate custom highlight reel
+POST /api/events/123/reels/generate
+{
+  "query": "player 23",
+  "duration": 30
+}
+# Returns: { "reel_url": "https://s3.../reel.mp4", "moments_count": 8 }
 ```
+
+## Configuration Management
+
+**Use config files for tunable thresholds** - Avoid hardcoding values that may need adjustment during testing/demos.
+
+### Config File Structure
+```python
+# backend/config.py
+class VideoConfig:
+    # Feature 1: Multi-Angle Switching
+    ANGLE_SWITCH_MIN_DURATION_MS = 4000  # Min time before switching angles
+    ANGLE_SCORE_SAMPLE_INTERVAL_MS = 2000  # How often to evaluate angles
+
+    # Feature 2: Auto-Zoom
+    ZOOM_MIN_ACTION_INTENSITY = 8  # Trigger zoom on high action
+    ZOOM_MIN_SPACING_SEC = 10  # Min time between zooms
+    ZOOM_WIDE_SHOT_MAX_INTENSITY = 1.5  # Only zoom wide/medium shots
+    ZOOM_FACTOR_HIGH = 2.5  # For importance >= 0.85
+    ZOOM_FACTOR_MEDIUM = 1.8  # For importance < 0.85
+    ZOOM_EASE_IN_SEC = 0.3
+    ZOOM_HOLD_MIN_SEC = 2
+    ZOOM_HOLD_MAX_SEC = 5
+    ZOOM_EASE_OUT_SEC = 0.3
+
+    # Feature 3: Ad Slot Detection (Multi-Factor Scoring)
+    AD_SCORE_THRESHOLD = 70  # Min score to consider slot
+    AD_MIN_SPACING_MS = 45000  # 45s between ads
+    AD_MAX_PER_4MIN = 1  # Max ad density
+    AD_MAX_TOTAL = 8  # Hard cap
+    AD_EXCLUDE_START_MS = 10000  # No ads in first 10s
+    AD_EXCLUDE_END_MS = 10000  # No ads in last 10s
+
+    # Ad Scoring Weights
+    AD_WEIGHT_ACTION_INTENSITY = 40
+    AD_WEIGHT_AUDIO_CONTEXT = 25
+    AD_WEIGHT_SCENE_TRANSITION = 20
+    AD_WEIGHT_VISUAL_COMPLEXITY = 15
+
+    # Ad Scoring Penalties
+    AD_PENALTY_KEY_MOMENT = 0.3  # 70% reduction near goals/scores
+    AD_PENALTY_ACTIVE_SPEECH = 0.5  # 50% reduction during speech
+    AD_PENALTY_CROWD_ENERGY = 0.4  # 60% reduction high energy
+
+    # Feature 3: Veo Video Generation
+    VEO_PRODUCT_VIDEO_DURATION_SEC = 3.5
+    VEO_TRANSITION_CROSSFADE_MS = 500
+    VEO_TRANSITION_CONTINUE_MOTION_MS = 800
+
+    # Chapter Generation
+    CHAPTER_MIN_SCENE_DURATION_SEC = 8
+
+    # Audio Sync
+    AUDIO_SYNC_FINE_TUNE_TOLERANCE_MS = 100
+```
+
+### Event-Specific Profiles
+```python
+# backend/config.py
+SWITCHING_PROFILES = {
+    "sports": {
+        "high_action": "closeup",
+        "ball_near_goal": "goal_angle",
+        "low_action": "crowd",
+        "default": "wide",
+        # Event-specific ad rules
+        "ad_block_scenes": ["scoring_play", "fast_break"],
+        "ad_boost_scenes": ["timeout", "halftime"],
+        "ad_boost_multiplier": 1.5
+    },
+    "ceremony": {
+        "name_called": "stage_closeup",
+        "walking": "wide",
+        "applause": "crowd",
+        "speech": "podium",
+        "ad_block_scenes": ["name_announcement", "award_presentation"],
+        "ad_boost_scenes": ["pause", "transition"],
+        "ad_boost_multiplier": 1.3
+    },
+    "performance": {
+        "solo": "closeup",
+        "full_band": "wide",
+        "crowd_singing": "crowd",
+        "ad_block_scenes": ["solo", "chorus"],
+        "ad_boost_scenes": ["break", "intermission"],
+        "ad_boost_multiplier": 1.4
+    }
+}
+
+IDEAL_AUDIO_SCORES = {
+    "timeout": 25,
+    "halftime": 25,
+    "pause": 25,
+    "transition": 20,
+    "break": 25,
+    "whistle": 15,
+    "applause": 10,
+    "cheer": 5
+}
+```
+
+### Usage in Code
+```python
+from config import VideoConfig, SWITCHING_PROFILES
+
+def select_optimal_ad_slots(timeline_analysis, event_type, duration_ms):
+    max_ads = min(int(duration_ms / 240000), VideoConfig.AD_MAX_TOTAL)
+
+    for ts in timeline_analysis:
+        score = calculate_ad_suitability_score(ts, context)
+
+        # Apply event-specific rules from config
+        profile = SWITCHING_PROFILES.get(event_type, {})
+        if ts.scene_classification in profile.get("ad_block_scenes", []):
+            score = 0
+        elif ts.scene_classification in profile.get("ad_boost_scenes", []):
+            score *= profile.get("ad_boost_multiplier", 1.0)
+
+        if score >= VideoConfig.AD_SCORE_THRESHOLD:
+            candidates.append(...)
+```
+
+**Benefits:**
+- Easy tuning during hackathon testing without code changes
+- Can override via environment variables for quick testing
+- Event organizers could customize thresholds per event type
+- Demo flexibility (adjust ad frequency on the fly)
+
+---
 
 ## Environment Variables
 ```
@@ -888,12 +1415,20 @@ def process_event(event_id: str):
     #    - Progressive processing: first 4 videos for quick preview
     # 6. Identify zoom moments (Feature 2)
     #    - Include user-specified zoom timestamps
-    # 7. Find ad slots + fetch Shopify products
-    # 8. Generate product videos with Veo (Feature 3)
-    # 9. Add sponsor power plays if configured
-    # 10. Generate chapter timestamps
-    # 11. Render with FFmpeg
-    # 12. Upload to S3, update status
+    # 7. Find ad slots (multi-factor scoring)
+    #    - 3-4 optimal placements with 45s spacing
+    # 8. Find transition opportunities at ad slots
+    #    - Scene boundaries, camera pans, angle switches
+    # 9. Fetch Shopify products
+    # 10. Generate Veo product videos (Feature 3) with motion matching
+    #    - Match camera pan direction or zoom style
+    # 11. Color-grade Veo videos to match event footage
+    # 12. Insert product videos with seamless transitions (native replacement)
+    #    - Cut event footage, crossfade to product, crossfade back
+    # 13. Add sponsor power plays if configured (overlays)
+    # 14. Generate chapter timestamps
+    # 15. Render with FFmpeg
+    # 16. Upload to S3, update status
 ```
 
 ## File Structure
@@ -980,12 +1515,17 @@ services:
 ## Build Priority (Hackathon)
 ```
 Hours 0-4:   Setup (repos, Supabase, S3, API keys)
-Hours 4-12:  Feature 1 (multi-angle switching) ← Core
+Hours 4-12:  Feature 1 (multi-angle switching) ← Core functionality
 Hours 12-20: Feature 2 (auto-zoom) ← Visual impact
-Hours 20-28: Feature 3A (Shopify + Veo ads + sponsor power plays) ← Prize differentiator
+Hours 20-28: Feature 3 (Native ad integration: Shopify + Veo) ← Prize differentiator
+             - Multi-factor ad slot detection
+             - Veo product video generation with motion matching
+             - Seamless video insertion with transitions
+             - Sponsor power plays
 Hours 28-36: Polish, demo prep, pitch practice
 
-Stretch:     Feature 3B (native ads), Feature 4 (personal reels), Veo stylized replays
+Fallback:    If Feature 3 native integration too complex, use simple overlay (30 min implementation)
+Stretch:     Feature 4 (personal reels), Veo stylized replays
 Post-Launch: Full Docker containerization for production deployment
 ```
 
