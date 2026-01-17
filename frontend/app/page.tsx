@@ -1,65 +1,112 @@
-import Image from "next/image";
+'use client'
+
+import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
+import { createEvent } from '@/lib/api'
 
 export default function Home() {
+  const router = useRouter()
+  const [name, setName] = useState('')
+  const [eventType, setEventType] = useState<'sports' | 'ceremony' | 'performance'>('sports')
+
+  const createEventMutation = useMutation({
+    mutationFn: () => createEvent({ name, event_type: eventType }),
+    onSuccess: (event) => {
+      router.push(`/events/${event.id}`)
+    },
+  })
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="max-w-2xl mx-auto">
+      <div className="text-center mb-12">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">
+          Create Broadcast-Quality Highlights
+        </h1>
+        <p className="text-lg text-gray-600">
+          Upload multi-angle footage, let AI find the best moments, and generate
+          professional highlight reels with your personal music.
+        </p>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-md p-8">
+        <h2 className="text-2xl font-semibold mb-6">Create New Event</h2>
+
+        <div className="space-y-6">
+          <div>
+            <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+              Event Name
+            </label>
+            <input
+              type="text"
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g., Championship Game, Graduation 2024"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Event Type
+            </label>
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                { value: 'sports', label: 'Sports', icon: '🏆' },
+                { value: 'ceremony', label: 'Ceremony', icon: '🎓' },
+                { value: 'performance', label: 'Performance', icon: '🎸' },
+              ].map((type) => (
+                <button
+                  key={type.value}
+                  type="button"
+                  onClick={() => setEventType(type.value as typeof eventType)}
+                  className={`p-4 border-2 rounded-lg text-center transition-colors ${
+                    eventType === type.value
+                      ? 'border-indigo-500 bg-indigo-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="text-2xl mb-1">{type.icon}</div>
+                  <div className="font-medium">{type.label}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => createEventMutation.mutate()}
+            disabled={!name || createEventMutation.isPending}
+            className="w-full py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Documentation
-          </a>
+            {createEventMutation.isPending ? 'Creating...' : 'Create Event'}
+          </button>
+
+          {createEventMutation.isError && (
+            <p className="text-red-600 text-sm">
+              Error: {createEventMutation.error.message}
+            </p>
+          )}
         </div>
-      </main>
+      </div>
+
+      <div className="mt-12 grid grid-cols-3 gap-8 text-center">
+        <div>
+          <div className="text-3xl mb-2">📹</div>
+          <h3 className="font-semibold mb-1">Multi-Angle</h3>
+          <p className="text-sm text-gray-600">Upload up to 12 camera angles</p>
+        </div>
+        <div>
+          <div className="text-3xl mb-2">🤖</div>
+          <h3 className="font-semibold mb-1">AI-Powered</h3>
+          <p className="text-sm text-gray-600">Smart angle switching & highlights</p>
+        </div>
+        <div>
+          <div className="text-3xl mb-2">🎵</div>
+          <h3 className="font-semibold mb-1">Your Music</h3>
+          <p className="text-sm text-gray-600">Beat-synced with your soundtrack</p>
+        </div>
+      </div>
     </div>
-  );
+  )
 }

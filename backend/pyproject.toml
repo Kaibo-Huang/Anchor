@@ -13,9 +13,29 @@ dependencies = [
     "google-genai>=1.59.0",
     "httpx>=0.28.1",
     "librosa>=0.11.0",
+    "numpy>=2.0.0",
+    "pydantic-settings>=2.6.0",
     "python-multipart>=0.0.21",
+    "redis>=5.2.0",
     "scipy>=1.17.0",
     "supabase>=2.27.2",
     "twelvelabs>=1.1.0",
     "uvicorn>=0.40.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "respx>=0.22.0",
+    "moto[s3]>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

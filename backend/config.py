@@ -1,0 +1,106 @@
+import os
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # API Keys
+    twelvelabs_api_key: str = ""
+    google_api_key: str = ""
+
+    # Supabase
+    supabase_url: str = ""
+    supabase_key: str = ""
+
+    # AWS S3
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = "us-east-1"
+    s3_bucket: str = ""
+
+    # Redis
+    redis_url: str = "redis://localhost:6379"
+
+    # Shopify
+    shopify_api_key: str = ""
+    shopify_api_secret: str = ""
+    shopify_api_version: str = "2024-01"
+
+    # Encryption
+    encryption_key: str = ""
+
+    # URLs
+    base_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:3000"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+class VideoConfig:
+    """Tunable thresholds for video processing."""
+
+    # Ad Detection
+    AD_SCORE_THRESHOLD = 70
+    AD_MIN_SPACING_MS = 45000
+    AD_MAX_PER_4MIN = 1
+    AD_WEIGHT_ACTION = 40
+    AD_WEIGHT_AUDIO = 25
+    AD_PENALTY_KEY_MOMENT = 0.3
+    AD_PENALTY_SPEECH = 0.5
+
+    # Zoom
+    ZOOM_MIN_ACTION = 8
+    ZOOM_MIN_SPACING_SEC = 10
+    ZOOM_FACTOR_HIGH = 2.5
+    ZOOM_FACTOR_MED = 1.8
+
+    # Angle Switching
+    MIN_ANGLE_DURATION_MS = 4000
+
+    # Music Integration
+    MUSIC_BEAT_SYNC_TOLERANCE_MS = 200
+    MUSIC_FADE_IN_SEC = 2
+    MUSIC_FADE_OUT_SEC = 3
+    MUSIC_DUCK_SPEECH_VOLUME = 0.2
+    MUSIC_BOOST_ACTION_VOLUME = 1.2
+
+
+SWITCHING_PROFILES = {
+    "sports": {
+        "high_action": "closeup",
+        "ball_near_goal": "goal_angle",
+        "low_action": "crowd",
+        "default": "wide",
+        "ad_block_scenes": ["scoring_play"],
+        "ad_boost_scenes": ["timeout"],
+    },
+    "ceremony": {
+        "name_called": "stage_closeup",
+        "walking": "wide",
+        "applause": "crowd",
+        "speech": "podium",
+        "ad_block_scenes": ["name_announcement"],
+        "ad_boost_scenes": ["pause"],
+    },
+    "performance": {
+        "solo": "closeup",
+        "full_band": "wide",
+        "crowd_singing": "crowd",
+        "ad_block_scenes": ["solo"],
+        "ad_boost_scenes": ["break"],
+    },
+}
+
+MUSIC_MIX_PROFILES = {
+    "sports": {"music_volume": 0.5, "event_volume": 0.8, "duck_speech": True},
+    "ceremony": {"music_volume": 0.3, "event_volume": 1.0, "duck_speech": True},
+    "performance": {"music_volume": 0.2, "event_volume": 1.0, "duck_speech": False},
+}

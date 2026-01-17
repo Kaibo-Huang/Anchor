@@ -1,4 +1,4 @@
-# CLAUDE.md - Anchor Project Context
+# Anchor Implementation Plan
 
 ## Project Summary
 AI-powered video production platform: multi-angle phone footage → broadcast-quality highlight reels with native ad integration.
@@ -7,10 +7,10 @@ AI-powered video production platform: multi-angle phone footage → broadcast-qu
 ## Stack
 ```
 Frontend:  Next.js 14+ (App Router), Tailwind, React Query, Video.js
-Backend:   Python 3.11+, FastAPI, Celery + Redis
+Backend:   Python 3.12+, FastAPI, Celery + Redis
 Database:  Supabase (PostgreSQL + Auth + Realtime)
 Storage:   AWS S3 (presigned URLs)
-Video:     FFmpeg (primary), MoviePy (animations), librosa (audio sync)
+Video:     FFmpeg (primary), librosa (audio sync)
 APIs:      TwelveLabs (Marengo 2.7, Pegasus 1.2), Shopify Storefront, Google Veo 3.1
 Pkg Mgrs:  bun (frontend), uv (backend)
 ```
@@ -74,7 +74,7 @@ Upload up to 12 videos → S3 → Audio sync → TwelveLabs analysis
   → Feature 1: Multi-angle switching (best angle per moment)
   → Feature 2: Auto-zoom on key moments
   → Feature 3: Shopify ads + Veo product videos + sponsor power plays
-  → Feature 4: Personal highlight reels (stretch)
+  → Feature 4: On-Demand Highlight Reels (CORE IDENTITY)
   → FFmpeg render → S3 output
 ```
 
@@ -90,64 +90,77 @@ Upload up to 12 videos → S3 → Audio sync → TwelveLabs analysis
 
 ### TwelveLabs Analysis (with Embeddings)
 ```python
+from twelvelabs import TwelveLabs
+from twelvelabs.models.embed import EmbeddingsTask
+
 client = TwelveLabs(api_key=KEY)
 
-# Create index with embedding engine for style matching
-index = client.index.create(
-    name=f"event_{id}",
-    engines=[
-        {"name": "marengo2.7", "options": ["visual", "audio"]},
-        {"name": "pegasus1.2", "options": ["visual"]}  # For embeddings
-    ]
+# Create index with models
+from twelvelabs.indexes import IndexesCreateRequestModelsItem
+index = client.indexes.create(
+    index_name=f"event_{id}",
+    models=[
+        IndexesCreateRequestModelsItem(
+            model_name="marengo3.0",
+            model_options=["visual", "audio"],
+        ),
+        IndexesCreateRequestModelsItem(
+            model_name="pegasus1.2",
+            model_options=["visual", "audio"],
+        ),
+    ],
 )
 
-task = client.task.create(index_id=index.id, url=s3_url)
+# Index a video
+task = client.tasks.create(index_id=index.id, video_url=s3_url)
+task.wait_for_done(sleep_interval=5)
 # Returns: scene classification, objects, audio events, action_intensity (1-10)
 
-# USE EMBEDDINGS for style/vibe matching (not just keyword search)
-# Example: Match "High Energy" segments
-def find_high_energy_segments(index_id):
-    """
-    Use vector embeddings to find segments matching a vibe/identity.
-    Better than keyword search for subjective qualities like "energy" or "emotion".
-    """
-    # Create embedding vector for "High Energy" reference
-    high_energy_query = "fast movement, intense action, crowd cheering, high energy"
+# Search
+results = client.search.query(
+    index_id=index.id,
+    query_text="high energy action",
+    options=["visual", "audio"]
+)
 
-    # Use semantic search with embeddings
-    search_results = client.search.query(
-        index_id=index_id,
-        query_text=high_energy_query,
-        search_options=["visual", "audio"],
-        operator="or"
-    )
+# Create video embeddings
+embed_task = client.embed.task.create(
+    model_name="Marengo-retrieval-2.7",
+    video_url=s3_url
+)
+embed_task.wait_for_done()
+video_embeddings = embed_task.video_embeddings  # List of segment embeddings
 
-    # OR: Use embeddings endpoint directly for vector similarity
-    embeddings = client.embed.task.create(
-        engine_name="marengo2.7",
-        video_url=s3_url
-    )
+# Create text embeddings for vibe anchors
+high_energy_embedding = client.embed.create(
+    model_name="Marengo-retrieval-2.7",
+    text="fast movement, intense action, crowd cheering, celebration"
+)
+emotional_embedding = client.embed.create(
+    model_name="Marengo-retrieval-2.7",
+    text="heartfelt moment, tears of joy, hugging, emotional reaction"
+)
+calm_embedding = client.embed.create(
+    model_name="Marengo-retrieval-2.7",
+    text="peaceful, relaxed, slow motion, gentle movement"
+)
 
-    # Compare embeddings to "identity" vectors (High Energy, Calm, Emotional, etc.)
-    # This maps the VIDEO IDENTITY to user preference
-    return embeddings
+# Compare using cosine similarity (embedding dimension is 1024)
+from scipy.spatial.distance import cosine
 
-# Use embeddings to match video style to user's desired "Identity" theme
 def match_video_identity_to_preference(segment_embeddings, identity_preference):
     """
     Identity theme: Compare video segment embeddings to identity anchor vectors.
     Example: User selects "High Energy" → find segments with similar vector.
     """
     identity_anchors = {
-        "high_energy": [0.8, 0.2, ...],  # Pre-computed or reference embedding
-        "emotional": [0.3, 0.9, ...],
-        "calm": [0.1, 0.1, ...]
+        "high_energy": high_energy_embedding.embedding,
+        "emotional": emotional_embedding.embedding,
+        "calm": calm_embedding.embedding
     }
 
     anchor_vector = identity_anchors[identity_preference]
 
-    # Compute cosine similarity between segment and anchor
-    from scipy.spatial.distance import cosine
     scores = []
     for seg_embedding in segment_embeddings:
         similarity = 1 - cosine(seg_embedding, anchor_vector)
@@ -623,24 +636,47 @@ For production, create embedded Shopify app:
 5. **Blend audio:** Crossfade event audio down/up around product video
 
 ```python
+from google import genai
+from google.genai import types
+import time
+
+client = genai.Client(api_key=GOOGLE_API_KEY)
+
 # Generate motion-matched Veo video
 operation = client.models.generate_videos(
-    model="veo-3.1-fast-preview",
-    prompt=f"Product showcase, {product.name}, camera panning right" if transition == "pan" else "rotating",
-    image=product.image_data,
-    duration=3.5
+    model="veo-3.1-generate-preview",  # or "veo-3.1-fast-generate-preview"
+    prompt=f"Product showcase of {product.name}, professional lighting, smooth camera motion",
+    config=types.GenerateVideosConfig(
+        aspect_ratio="16:9",
+        # duration options: 4, 6, or 8 seconds
+    ),
 )
 
-# Insert with crossfade transition
+# Poll for completion
+while not operation.done:
+    time.sleep(10)
+    operation = client.operations.get(operation)
+
+# Get result
+video = operation.response.generated_videos[0]
+video.video.save(output_path)
+```
+
+```bash
+# Insert with crossfade transition (three clips: before → product → after)
+# offset = duration of previous clip minus crossfade duration
 ffmpeg -i before.mp4 -i product.mp4 -i after.mp4 \
-  -filter_complex "[0][1]xfade=duration=0.5[v1];[v1][2]xfade=duration=0.5[v]" \
-  output.mp4
+  -filter_complex \
+    "[0:v][1:v]xfade=transition=fade:duration=0.5:offset=4.5[v1]; \
+     [v1][2:v]xfade=transition=fade:duration=0.5:offset=7.5[vout]; \
+     [0:a][1:a]acrossfade=d=0.5[a1]; \
+     [a1][2:a]acrossfade=d=0.5[aout]" \
+  -map "[vout]" -map "[aout]" output.mp4
 ```
 
 ### Sponsor Power Plays
 Lower-third overlays for key moments: "{sponsor} GOAL CAM!", "{sponsor} Play of the Game"
 
-### Sponsor Power Plays
 ```python
 TEMPLATES = {
     "goal": "{sponsor} GOAL CAM!",
@@ -844,7 +880,7 @@ async def generate_personal_highlight_reel(
         "moments_count": len(selected_clips),
         "total_duration": total_duration,
         "vibe": vibe,
-        "processing_time_ms": "< 10000"  # Instant results
+        "processing_time_ms": processing_time  # Typically 30-60 seconds
     }
 
 
@@ -1025,7 +1061,7 @@ Returns: List of previously generated reels
 
 ### Benefits
 - **STRONGEST Identity Feature:** Users literally search for "me" to find themselves
-- **Instant Results:** <10s generation using existing TwelveLabs index
+- **Fast Results:** Typically 30-60s generation using existing TwelveLabs index
 - **On-Demand:** No batch processing, no waiting
 - **Embedding-Powered:** Matches vibe preference (High Energy, Emotional, Calm)
 - **Demo Impact:** Live queries during presentation show real-time personalization
@@ -1042,10 +1078,80 @@ Returns: List of previously generated reels
 
 ## Database Schema
 ```sql
-events (id, user_id, name, event_type, status, shopify_store_url, sponsor_name, master_video_url, music_url, music_metadata JSONB)
-videos (id, event_id, original_url, angle_type, sync_offset_ms, analysis_data JSONB, status)
-timelines (id, event_id, segments JSONB, zooms JSONB, ad_slots JSONB, chapters JSONB, beat_synced BOOLEAN)
-custom_reels (id, event_id, query TEXT, output_url, moments JSONB, duration_sec INT, created_at)
+-- Events table
+CREATE TABLE events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id),
+    name TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('sports', 'ceremony', 'performance')),
+    status TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'uploading', 'analyzing', 'analyzed', 'generating', 'completed', 'failed')),
+    shopify_store_url TEXT,
+    shopify_access_token TEXT,  -- Encrypted with Fernet
+    sponsor_name TEXT,
+    master_video_url TEXT,
+    music_url TEXT,
+    music_metadata JSONB,
+    twelvelabs_index_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Videos table
+CREATE TABLE videos (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+    original_url TEXT NOT NULL,
+    angle_type TEXT NOT NULL CHECK (angle_type IN ('wide', 'closeup', 'crowd', 'goal_angle', 'stage', 'other')),
+    sync_offset_ms INTEGER DEFAULT 0,
+    analysis_data JSONB,
+    twelvelabs_video_id TEXT,
+    status TEXT NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading', 'uploaded', 'analyzing', 'analyzed', 'failed')),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Timelines table
+CREATE TABLE timelines (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id UUID REFERENCES events(id) ON DELETE CASCADE UNIQUE,
+    segments JSONB NOT NULL DEFAULT '[]',
+    zooms JSONB NOT NULL DEFAULT '[]',
+    ad_slots JSONB NOT NULL DEFAULT '[]',
+    chapters JSONB NOT NULL DEFAULT '[]',
+    beat_synced BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Custom reels table
+CREATE TABLE custom_reels (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+    query TEXT NOT NULL,
+    vibe TEXT NOT NULL CHECK (vibe IN ('high_energy', 'emotional', 'calm')),
+    output_url TEXT,
+    moments JSONB,
+    duration_sec INTEGER,
+    status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing', 'completed', 'failed')),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE timelines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE custom_reels ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies (simple: users can only access their own events)
+CREATE POLICY "Users can manage own events" ON events
+    FOR ALL USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can manage videos in own events" ON videos
+    FOR ALL USING (event_id IN (SELECT id FROM events WHERE user_id = auth.uid()));
+
+CREATE POLICY "Users can manage timelines in own events" ON timelines
+    FOR ALL USING (event_id IN (SELECT id FROM events WHERE user_id = auth.uid()));
+
+CREATE POLICY "Users can manage reels in own events" ON custom_reels
+    FOR ALL USING (event_id IN (SELECT id FROM events WHERE user_id = auth.uid()));
 
 -- music_metadata JSONB example:
 -- {
@@ -1060,16 +1166,19 @@ custom_reels (id, event_id, query TEXT, output_url, moments JSONB, duration_sec 
 
 ## API Endpoints
 ```
-POST /api/events                     Create event
-POST /api/events/:id/videos          Get presigned S3 URL
-POST /api/events/:id/music/upload    Get presigned S3 URL for music upload
-POST /api/events/:id/music/analyze   Analyze uploaded music (beats, tempo, intensity)
-POST /api/events/:id/analyze         Start TwelveLabs analysis
-POST /api/events/:id/generate        Generate final video (with music mix)
-POST /api/events/:id/shopify         Connect Shopify store
-POST /api/events/:id/sponsor         Set sponsor power plays
-GET  /api/events/:id/chapters        Get chapter markers (JSON for player navigation)
-POST /api/events/:id/reels/generate  Generate custom highlight reel from query
+POST /api/events                         Create event
+POST /api/events/:id/videos              Get presigned S3 URL
+POST /api/events/:id/music/upload        Get presigned S3 URL for music upload
+POST /api/events/:id/music/analyze       Analyze uploaded music (beats, tempo, intensity)
+POST /api/events/:id/analyze             Start TwelveLabs analysis
+POST /api/events/:id/generate            Generate final video (with music mix)
+GET  /api/events/:id/shopify/auth-url    Get Shopify OAuth URL (requires ?shop=domain)
+GET  /api/auth/shopify/callback          Handle OAuth callback (redirects to frontend)
+GET  /api/events/:id/shopify/products    Fetch products from connected store
+DELETE /api/events/:id/shopify           Disconnect Shopify store
+POST /api/events/:id/sponsor             Set sponsor power plays
+GET  /api/events/:id/chapters            Get chapter markers (JSON for player navigation)
+POST /api/events/:id/reels/generate      Generate custom highlight reel from query
 ```
 
 ## Configuration Management
@@ -1142,18 +1251,180 @@ NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, NEXT_PUBLIC_API_URL, NE
 ```
 
 ## Dependencies
-**Backend:** fastapi, uvicorn, celery[redis], twelvelabs, google-genai, ffmpeg-python (command builder ONLY), librosa, scipy, supabase, boto3, httpx, cryptography, numpy
-**Frontend:** next 14.x, react 18.x, @tanstack/react-query, @supabase/supabase-js, video.js
 
-**Note:** MoviePy removed - use FFmpeg exclusively for performance. ffmpeg-python only used to build commands, not process frames.
+**Backend (pyproject.toml):**
+```toml
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "celery[redis]>=5.4.0",
+    "twelvelabs>=1.1.0",
+    "google-genai>=1.0.0",
+    "ffmpeg-python>=0.2.0",
+    "librosa>=0.10.0",
+    "scipy>=1.14.0",
+    "numpy>=2.0.0",
+    "supabase>=2.10.0",
+    "boto3>=1.35.0",
+    "httpx>=0.27.0",
+    "cryptography>=43.0.0",
+    "pydantic-settings>=2.6.0",
+    "redis>=5.2.0",
+    "python-multipart>=0.0.12",
+]
+```
+
+**Frontend (package.json):**
+```json
+{
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@tanstack/react-query": "^5.60.0",
+    "@supabase/supabase-js": "^2.46.0",
+    "video.js": "^8.18.0"
+  }
+}
+```
+
+**Note:** ffmpeg-python only used to build commands, not process frames.
 
 ## File Structure
 ```
 anchor/
-├── frontend/app/, components/, lib/ (supabase.ts, api.ts)
-├── backend/main.py, worker.py, routers/, services/
-│   └── services: twelvelabs, veo, audio_sync, music_sync, timeline, zoom, overlay, chapters, sponsor, render
-└── CLAUDE.md
+├── frontend/
+│   ├── app/
+│   │   ├── page.tsx                    # Landing page
+│   │   ├── layout.tsx                  # Root layout with providers
+│   │   ├── auth/callback/page.tsx      # Supabase auth callback
+│   │   └── events/
+│   │       └── [id]/page.tsx           # Event detail page
+│   ├── components/
+│   │   ├── ShopifyConnect.tsx
+│   │   ├── PersonalReelGenerator.tsx
+│   │   ├── MusicUpload.tsx
+│   │   ├── VideoUpload.tsx
+│   │   └── VideoPlayer.tsx
+│   └── lib/
+│       ├── supabase.ts                 # Supabase client
+│       └── api.ts                      # Backend API client
+├── backend/
+│   ├── main.py                         # FastAPI app
+│   ├── config.py                       # Settings & VideoConfig
+│   ├── worker.py                       # Celery worker
+│   ├── routers/
+│   │   ├── __init__.py
+│   │   ├── events.py                   # CRUD, analyze, generate
+│   │   ├── videos.py                   # Upload URLs, list videos
+│   │   ├── shopify.py                  # OAuth, products
+│   │   └── reels.py                    # Generate highlight reels
+│   └── services/
+│       ├── __init__.py
+│       ├── supabase_client.py          # Supabase singleton
+│       ├── s3_client.py                # S3 presigned URLs
+│       ├── redis_client.py             # Redis singleton
+│       ├── encryption.py               # Fernet encrypt/decrypt
+│       ├── twelvelabs_service.py       # Index, analyze, search, embed
+│       ├── veo_service.py              # Generate product videos
+│       ├── audio_sync.py               # librosa fingerprint sync
+│       ├── music_sync.py               # Beat detection, alignment
+│       ├── timeline.py                 # Angle switching algorithm
+│       ├── zoom.py                     # Ken Burns zoom detection
+│       ├── render.py                   # FFmpeg rendering pipeline
+│       └── overlay.py                  # Sponsor overlays
+├── CLAUDE.md
+├── PLAN.md
+└── supabase/
+    └── schema.sql                      # Database schema
+```
+
+## Security (Hackathon MVP)
+
+**Authentication:** Use Supabase Auth (already in stack)
+- Frontend: `supabase.auth.signInWithOAuth({ provider: 'google' })`
+- Backend: Validate JWT from `Authorization: Bearer <token>` header
+- Extract user_id from token for RLS
+
+**Minimal Backend Auth Middleware:**
+```python
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer
+from supabase import create_client
+
+security = HTTPBearer()
+
+async def get_current_user(credentials = Depends(security)):
+    token = credentials.credentials
+    supabase = get_supabase()
+    user = supabase.auth.get_user(token)
+    if not user:
+        raise HTTPException(401, "Invalid token")
+    return user.user
+
+# Use in routes:
+@router.post("")
+async def create_event(event: EventCreate, user = Depends(get_current_user)):
+    # user.id is available
+```
+
+**Token Encryption:** Already using Fernet for Shopify tokens (keep as-is)
+
+**CORS:** Restrict to frontend URL in production
+
+## Error Handling Strategy
+
+**API Errors:** Return consistent JSON format
+```python
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "internal_error", "message": str(exc)}
+    )
+
+# Specific errors
+raise HTTPException(400, detail={"error": "invalid_input", "message": "..."})
+raise HTTPException(404, detail={"error": "not_found", "message": "Event not found"})
+```
+
+**Celery Task Failures:**
+```python
+@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+def analyze_videos_task(self, event_id):
+    try:
+        # ... processing
+    except TwelveLabsError as e:
+        # Retry on API errors
+        raise self.retry(exc=e)
+    except Exception as e:
+        # Mark event as failed, don't retry
+        update_event_status(event_id, "failed", error=str(e))
+        raise
+
+# Update event status on failure
+def update_event_status(event_id, status, error=None):
+    supabase.table("events").update({
+        "status": status,
+        "error_message": error
+    }).eq("id", event_id).execute()
+```
+
+**S3 Upload Failures:**
+- Use presigned URLs (client handles retry)
+- Mark video as "failed" if confirm-upload not called within 1 hour
+
+**TwelveLabs Failures:**
+- Retry 3x with exponential backoff
+- If all retries fail, mark event as "failed" and notify user
+
+**Frontend Error Display:**
+```tsx
+const { error } = useQuery(['event', id], fetchEvent)
+if (error) return <ErrorCard message={error.message} onRetry={refetch} />
 ```
 
 ## FEATURE 5: Personal Music Integration (Identity)
@@ -1417,7 +1688,7 @@ async def integrate_personal_music(event_id, video_path, music_url):
 3. **Embedding ranking** → score moments by vibe similarity (High Energy, Emotional, Calm)
 4. **Select top clips** → fill requested duration (default 30s)
 5. **FFmpeg render** → concat with crossfades, add title card, mix music
-6. **S3 upload** → instant URL (<10s total)
+6. **S3 upload** → URL returned (typically 30-60s total)
 
 **Key Difference:** On-demand reels use EXISTING TwelveLabs index → no re-analysis → instant results. This is why Feature 4 is high priority - it's fast to implement and has huge demo impact.
 
