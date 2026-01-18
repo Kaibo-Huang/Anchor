@@ -10,7 +10,6 @@ import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
 import AnalysisProgress from '@/components/AnalysisProgress'
 import GenerationProgress from '@/components/GenerationProgress'
-import { useEffect } from 'react'
 
 export default function EventPage() {
   const params = useParams()
@@ -63,12 +62,6 @@ export default function EventPage() {
       queryClient.invalidateQueries({ queryKey: ['event', eventId] })
     },
   })
-
-  useEffect(() => {
-    if (event) {
-      document.title = `${event.name} - Anchor`
-    }
-  }, [event])
 
   if (eventLoading) {
     return (
