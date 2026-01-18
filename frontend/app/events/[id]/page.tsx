@@ -10,6 +10,7 @@ import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
 import AnalysisProgress from '@/components/AnalysisProgress'
 import GenerationProgress from '@/components/GenerationProgress'
+import ProcessingLogs from '@/components/ProcessingLogs'
 import Link from 'next/link'
 
 export default function EventPage() {
@@ -200,6 +201,17 @@ export default function EventPage() {
             </div>
           </div>
         </div>
+
+        {/* Processing Logs */}
+        {(event.status === 'analyzing' || event.status === 'analyzed' || event.status === 'generating' || event.status === 'completed' || event.status === 'failed') && (
+          <div className="mt-8">
+            <ProcessingLogs
+              analysisProgress={event.analysis_progress}
+              generationProgress={event.generation_progress}
+              eventStatus={event.status}
+            />
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="mt-8 flex gap-4">
