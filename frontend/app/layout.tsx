@@ -17,6 +17,11 @@ const customTheme = createTheme({
       fontWeight: 700,
       color: '#383A42'
     },
+    h4: {
+        fontSize: 'clamp(1.25rem, 2.6vw, 2rem)',
+        fontWeight: 500,
+        color: '#A1A1A1',
+    },
     h5: {
       fontSize: 'clamp(1.25rem, 2.6vw, 2rem)',
       fontWeight: 600,
@@ -24,6 +29,10 @@ const customTheme = createTheme({
     },
     button: {
       textTransform: 'none'
+    },
+    body1: {
+      fontSize: 'clamp(1rem, 2vw, 1.5rem)',
+      color: '#FAFAFA'
     }
   },
   palette: {
@@ -37,7 +46,7 @@ const customTheme = createTheme({
       main: '#50A14F', // Green
     },
     error: {
-      main: '#CA1243', // Red
+      main: '#FAFAFA', // Red
     },
     warning: {
         main: '#A1A1A1', // grey
