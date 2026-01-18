@@ -4,7 +4,7 @@
 
 ## Inspiration
 
-Branding builds identity. Whether you're a high school athlete creating a recruitment tape or a UofTHacks trying to promote their next hackathon, that perfect video tells your story.
+Branding builds identity. Whether you're a high school athlete creating a recruitment tape or a UofTHacks trying to promote sponsors and their next hackathon, that perfect video tells your story.
 
 But here's the problem: professional video editing is intimidating and expensive. Athletes have game footage but don't know how to stitch them together and promote their brand sponsors. Organizations want to promote their events but can't afford a videographer.
 
