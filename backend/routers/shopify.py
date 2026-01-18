@@ -61,6 +61,76 @@ class ProductResponse(BaseModel):
 # ============================================================================
 
 
+class ManualStoreRequest(BaseModel):
+    shop_domain: str
+    admin_api_token: str
+
+
+@router.post("/api/shopify/stores/manual")
+async def add_store_manually(request: ManualStoreRequest):
+    """Manually add a store using Admin API access token (dev/testing).
+
+    Bypasses OAuth flow by using a direct Admin API token from Shopify admin.
+    Get token from: Store Admin → Settings → Apps → Develop apps → Create app
+
+    Args:
+        shop_domain: Store domain (e.g., "anchor-test-store.myshopify.com")
+        admin_api_token: Admin API access token (starts with "shpat_")
+
+    Returns:
+        store_id: ID of created store record
+    """
+    settings = get_settings()
+    supabase = get_supabase()
+
+    # Validate shop domain
+    if not request.shop_domain.endswith(".myshopify.com"):
+        raise HTTPException(status_code=400, detail="Invalid shop domain")
+
+    # Test the token by fetching shop info
+    async with httpx.AsyncClient() as client:
+        shop_response = await client.get(
+            f"https://{request.shop_domain}/admin/api/{settings.shopify_api_version}/shop.json",
+            headers={"X-Shopify-Access-Token": request.admin_api_token},
+        )
+
+        if shop_response.status_code != 200:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid token or shop domain. Shopify returned: {shop_response.status_code}"
+            )
+
+        shop_data = shop_response.json().get("shop", {})
+        shop_name = shop_data.get("name")
+
+    # Upsert store record
+    result = supabase.table("shopify_stores").upsert(
+        {
+            "shop_domain": request.shop_domain,
+            "shop_name": shop_name,
+            "access_token": encrypt(request.admin_api_token),
+            "scopes": "read_products,read_product_listings,read_files",
+            "status": "active",
+            "installed_at": "now()",
+        },
+        on_conflict="shop_domain",
+    ).execute()
+
+    store_id = result.data[0]["id"] if result.data else None
+
+    # Trigger async product sync
+    if store_id:
+        from worker import sync_store_products_task
+        sync_store_products_task.delay(store_id)
+
+    return {
+        "message": "Store added successfully",
+        "store_id": store_id,
+        "shop_name": shop_name,
+        "shop_domain": request.shop_domain
+    }
+
+
 @router.get("/api/shopify/install")
 async def get_shopify_install_url(shop: str):
     """Generate OAuth install URL for brands to install the app.
