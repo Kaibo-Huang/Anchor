@@ -92,34 +92,41 @@ export default function EventsPage() {
                 {/* Thumbnail / Preview */}
                 <div className="h-48 bg-gradient-to-br from-[#4078F2] to-[#2d5bd9] flex items-center justify-center relative overflow-hidden">
                   {(event.master_video_url || (event as any).thumbnail_url) ? (
-                    <>
-                      <video
-                        key={event.id}
-                        src={event.master_video_url || (event as any).thumbnail_url}
-                        className="w-full h-full object-cover"
-                        muted
-                        playsInline
-                        preload="metadata"
-                        crossOrigin="anonymous"
-                        onMouseOver={(e) => {
-                          const video = e.target as HTMLVideoElement
-                          video.play().catch(() => {
-                            // Ignore AbortError when user moves mouse away quickly
-                          })
-                        }}
-                        onMouseOut={(e) => {
-                          const video = e.target as HTMLVideoElement
-                          video.pause()
-                          video.currentTime = 0
-                        }}
-                        onError={(e) => {
-                          // Hide video and show fallback icon on error
-                          const video = e.target as HTMLVideoElement
-                          video.style.display = 'none'
-                        }}
-                      />
-                      <span className="text-6xl filter drop-shadow-lg absolute">{eventTypeIcons[event.event_type] || '📹'}</span>
-                    </>
+                    <video
+                      key={event.id}
+                      src={event.master_video_url || (event as any).thumbnail_url}
+                      className="w-full h-full object-cover"
+                      muted
+                      playsInline
+                      preload="metadata"
+                      crossOrigin="anonymous"
+                      onLoadedMetadata={(e) => {
+                        // Seek to 0.5s to ensure a frame is displayed as thumbnail
+                        const video = e.target as HTMLVideoElement
+                        video.currentTime = 0.5
+                      }}
+                      onMouseOver={(e) => {
+                        const video = e.target as HTMLVideoElement
+                        video.play().catch(() => {
+                          // Ignore AbortError when user moves mouse away quickly
+                        })
+                      }}
+                      onMouseOut={(e) => {
+                        const video = e.target as HTMLVideoElement
+                        video.pause()
+                        video.currentTime = 0.5
+                      }}
+                      onError={(e) => {
+                        // Hide video and show fallback icon on error
+                        const video = e.target as HTMLVideoElement
+                        video.style.display = 'none'
+                        // Show fallback icon by adding a sibling element
+                        const fallback = document.createElement('span')
+                        fallback.className = 'text-6xl filter drop-shadow-lg'
+                        fallback.textContent = eventTypeIcons[event.event_type] || '📹'
+                        video.parentElement?.appendChild(fallback)
+                      }}
+                    />
                   ) : (
                     <span className="text-6xl filter drop-shadow-lg">{eventTypeIcons[event.event_type] || '📹'}</span>
                   )}
