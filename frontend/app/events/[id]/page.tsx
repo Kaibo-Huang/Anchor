@@ -8,6 +8,7 @@ import MusicUpload from '@/components/MusicUpload'
 import ShopifyConnect from '@/components/ShopifyConnect'
 import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
+import AnalysisProgress from '@/components/AnalysisProgress'
 
 export default function EventPage() {
   const params = useParams()
@@ -146,6 +147,8 @@ export default function EventPage() {
               <p className="text-sm text-gray-500">
                 {event.status === 'analyzing' ? 'Analyzing with TwelveLabs...' : 'Scene detection, objects, actions'}
               </p>
+              {/* Detailed Progress Bar */}
+              <AnalysisProgress progress={event.analysis_progress} status={event.status} />
             </div>
           </div>
 

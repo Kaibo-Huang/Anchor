@@ -46,6 +46,19 @@ celery.conf.update(
 )
 
 
+def update_analysis_progress(supabase, event_id: str, stage: str, stage_progress: float, current_video: int, total_videos: int, message: str):
+    """Update the analysis progress in the database."""
+    progress = {
+        "stage": stage,
+        "stage_progress": min(1.0, max(0.0, stage_progress)),
+        "current_video": current_video,
+        "total_videos": total_videos,
+        "message": message,
+    }
+    supabase.table("events").update({"analysis_progress": progress}).eq("id", event_id).execute()
+    print(f"[Worker:analyze_videos] Progress: {stage} - {message} ({stage_progress*100:.0f}%)")
+
+
 @celery.task(bind=True, max_retries=3, default_retry_delay=60)
 def analyze_videos_task(self, event_id: str):
     """Analyze all videos in an event using TwelveLabs.
@@ -85,6 +98,11 @@ def analyze_videos_task(self, event_id: str):
             print(f"[Worker:analyze_videos] ERROR: No uploaded videos found")
             raise ValueError("No uploaded videos found")
 
+        total_videos = len(videos.data)
+
+        # Initialize progress
+        update_analysis_progress(supabase, event_id, "initializing", 0.0, 0, total_videos, "Creating TwelveLabs index...")
+
         # Create TwelveLabs index
         print(f"[Worker:analyze_videos] Creating TwelveLabs index: event_{event_id}")
         index_id = create_index(f"event_{event_id}")
@@ -100,7 +118,15 @@ def analyze_videos_task(self, event_id: str):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             for i, video in enumerate(videos.data):
-                print(f"[Worker:analyze_videos] Preparing video {i + 1}/{len(videos.data)}: {video['id']}")
+                print(f"[Worker:analyze_videos] Preparing video {i + 1}/{total_videos}: {video['id']}")
+
+                # Update progress - downloading stage
+                update_analysis_progress(
+                    supabase, event_id, "downloading",
+                    i / total_videos,
+                    i + 1, total_videos,
+                    f"Downloading video {i + 1}/{total_videos}..."
+                )
 
                 # Update video status
                 supabase.table("videos").update({"status": "analyzing"}).eq("id", video["id"]).execute()
@@ -119,6 +145,12 @@ def analyze_videos_task(self, event_id: str):
                 # Check if compression is needed (TwelveLabs limit is 2GB)
                 if file_size > MAX_SIZE_BYTES:
                     print(f"[Worker:analyze_videos] Video {i + 1} exceeds 1.8GB, compressing...")
+                    update_analysis_progress(
+                        supabase, event_id, "compressing",
+                        i / total_videos,
+                        i + 1, total_videos,
+                        f"Compressing video {i + 1}/{total_videos} (too large)..."
+                    )
                     compressed_path = os.path.join(tmpdir, f"video_{video['id']}_compressed.mp4")
                     compress_video_for_twelvelabs(local_video_path, compressed_path)
 
@@ -137,6 +169,12 @@ def analyze_videos_task(self, event_id: str):
 
             # Submit all indexing tasks in parallel (don't wait)
             print(f"[Worker:analyze_videos] ---------- SUBMITTING PARALLEL INDEXING ----------")
+            update_analysis_progress(
+                supabase, event_id, "indexing",
+                0.0, 0, total_videos,
+                "Submitting videos to TwelveLabs..."
+            )
+
             pending_tasks = []
             for vt in video_tasks:
                 print(f"[Worker:analyze_videos] Submitting video {vt['index'] + 1}/{len(video_tasks)} to TwelveLabs...")
@@ -156,8 +194,14 @@ def analyze_videos_task(self, event_id: str):
             client = get_twelvelabs_client()
 
             completed_tasks = []
-            for pt in pending_tasks:
+            for idx, pt in enumerate(pending_tasks):
                 if pt["task_id"]:
+                    update_analysis_progress(
+                        supabase, event_id, "indexing",
+                        idx / total_videos,
+                        idx + 1, total_videos,
+                        f"TwelveLabs analyzing video {idx + 1}/{total_videos}..."
+                    )
                     print(f"[Worker:analyze_videos] Waiting for video {pt['index'] + 1}...")
                     completed_task = client.tasks.wait_for_done(task_id=pt["task_id"], sleep_interval=5)
                     completed_tasks.append({
@@ -168,6 +212,12 @@ def analyze_videos_task(self, event_id: str):
 
             # Generate embeddings in parallel using ThreadPoolExecutor
             print(f"[Worker:analyze_videos] ---------- GENERATING EMBEDDINGS IN PARALLEL ----------")
+            update_analysis_progress(
+                supabase, event_id, "embeddings",
+                0.0, 0, total_videos,
+                "Generating video embeddings..."
+            )
+
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             def generate_embeddings_for_video(ct):
@@ -181,10 +231,22 @@ def analyze_videos_task(self, event_id: str):
                 for future in as_completed(futures):
                     result = future.result()
                     results.append(result)
+                    update_analysis_progress(
+                        supabase, event_id, "embeddings",
+                        len(results) / total_videos,
+                        len(results), total_videos,
+                        f"Generated embeddings for {len(results)}/{total_videos} videos..."
+                    )
                     print(f"[Worker:analyze_videos] Embeddings complete for video {result['index'] + 1}: {len(result['embeddings'])} segments")
 
             # Store all results
             print(f"[Worker:analyze_videos] ---------- SAVING RESULTS ----------")
+            update_analysis_progress(
+                supabase, event_id, "saving",
+                0.9, total_videos, total_videos,
+                "Saving analysis results..."
+            )
+
             for result in results:
                 video = result["video"]
                 completed_task = result["completed_task"]
@@ -202,7 +264,12 @@ def analyze_videos_task(self, event_id: str):
                 }).eq("id", video["id"]).execute()
                 print(f"[Worker:analyze_videos] Video {result['index'] + 1} saved to database")
 
-        # Update event status
+        # Update event status and clear progress (completed)
+        update_analysis_progress(
+            supabase, event_id, "complete",
+            1.0, total_videos, total_videos,
+            "Analysis complete!"
+        )
         supabase.table("events").update({"status": "analyzed"}).eq("id", event_id).execute()
         print(f"[Worker:analyze_videos] ========== ANALYSIS COMPLETE ==========")
         print(f"[Worker:analyze_videos] Total videos analyzed: {len(videos.data)}")

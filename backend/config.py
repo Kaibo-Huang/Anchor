@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     s3_bucket: str = ""
 
+    # S3 Upload Optimization
+    s3_use_acceleration: bool = True
+    s3_multipart_threshold: int = 100 * 1024 * 1024  # 100MB threshold
+    s3_multipart_chunk_size: int = 10 * 1024 * 1024  # 10MB chunks
+    s3_multipart_max_concurrency: int = 4  # Max parallel chunk uploads
+
     # Redis
     redis_url: str = "redis://localhost:6379"
 
