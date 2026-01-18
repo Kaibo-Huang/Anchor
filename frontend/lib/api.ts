@@ -58,6 +58,10 @@ export async function getEvent(eventId: string): Promise<Event> {
   return apiRequest(`/api/events/${eventId}`)
 }
 
+export async function listEvents(limit: number = 50, offset: number = 0): Promise<{ events: Event[] }> {
+  return apiRequest(`/api/events?limit=${limit}&offset=${offset}`)
+}
+
 export async function analyzeEvent(eventId: string): Promise<{ message: string; event_id: string; video_count: number }> {
   return apiRequest(`/api/events/${eventId}/analyze`, {
     method: 'POST',

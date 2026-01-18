@@ -32,6 +32,47 @@ class SponsorUpdate(BaseModel):
     sponsor_name: str
 
 
+@router.get("")
+async def list_events(limit: int = 50, offset: int = 0):
+    """List all events, ordered by creation date (newest first)."""
+    supabase = get_supabase()
+    settings = get_settings()
+
+    result = (
+        supabase.table("events")
+        .select("*")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+
+    events = []
+    for event in result.data or []:
+        # Generate presigned URL for master video if exists
+        master_video_url = None
+        if event.get("master_video_url"):
+            try:
+                bucket, key = parse_s3_uri(event["master_video_url"])
+                master_video_url = generate_presigned_download_url(bucket, key)
+            except Exception:
+                master_video_url = event["master_video_url"]
+
+        events.append({
+            "id": event["id"],
+            "name": event["name"],
+            "event_type": event["event_type"],
+            "status": event["status"],
+            "user_id": event.get("user_id"),
+            "shopify_store_url": event.get("shopify_store_url"),
+            "sponsor_name": event.get("sponsor_name"),
+            "master_video_url": master_video_url,
+            "music_url": event.get("music_url"),
+            "created_at": event.get("created_at"),
+        })
+
+    return {"events": events}
+
+
 @router.post("", response_model=EventResponse)
 async def create_event(event: EventCreate):
     """Create a new event."""
