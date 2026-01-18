@@ -54,9 +54,9 @@ class VideoConfig:
     """Tunable thresholds for video processing."""
 
     # Ad Detection
-    AD_SCORE_THRESHOLD = 70
-    AD_MIN_SPACING_MS = 45000
-    AD_MAX_PER_4MIN = 1
+    AD_SCORE_THRESHOLD = 40  # Lowered from 70 to generate more ad slots by default
+    AD_MIN_SPACING_MS = 60000  # 1 minute minimum spacing (no more than 1 ad per minute)
+    AD_MAX_PER_4MIN = 4  # Allow up to 4 ads per 4 minutes (1 per minute max)
     AD_WEIGHT_ACTION = 40
     AD_WEIGHT_AUDIO = 25
     AD_PENALTY_KEY_MOMENT = 0.3

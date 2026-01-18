@@ -80,6 +80,13 @@ def generate_timeline(
     # Build variable-length segments from selected moments with hysteresis
     segments = build_variable_segments(selected_moments, event_type, min_segment_ms)
 
+    # Log video usage before diversity enforcement
+    if segments:
+        video_usage = {}
+        for seg in segments:
+            video_usage[seg["video_id"]] = video_usage.get(seg["video_id"], 0) + 1
+        print(f"[Timeline] Video usage before diversity: {video_usage}")
+
     # Ensure angle diversity - all videos should be represented
     segments = _ensure_angle_diversity(segments, videos)
 
@@ -495,6 +502,9 @@ def score_all_moments(
     Pass 1 of the two-pass timeline generation. Scores all potential moments
     without filtering, so we can later select the best ones.
 
+    IMPORTANT: Only scores moments where the video actually has content
+    (accounting for sync offsets).
+
     Args:
         videos: List of video dicts
         duration_ms: Total source duration in milliseconds
@@ -513,6 +523,19 @@ def score_all_moments(
         engagement = calculate_engagement_score(scene_context)
 
         for video_idx, video in enumerate(videos):
+            # Check if this video has content at this timestamp (accounting for sync offset)
+            sync_offset = video.get("sync_offset_ms", 0)
+            video_time_ms = t_ms - sync_offset
+
+            # Skip if this timestamp is before the video starts or after it ends
+            if video_time_ms < 0:
+                continue  # Video hasn't started yet at this timeline point
+
+            # Get video duration
+            video_duration_ms = get_video_duration_ms(video["path"])
+            if video_time_ms >= video_duration_ms:
+                continue  # Video has already ended at this timeline point
+
             # Score with speaker prioritization for speech events
             score = score_angle_at_time(
                 video=video,
@@ -1000,15 +1023,20 @@ def generate_ad_slots(
             if slot["score"] >= VideoConfig.AD_SCORE_THRESHOLD:
                 selected_slots.append(slot)
 
-            # Max 1 ad per 4 minutes
-            max_ads = max(1, int((duration_ms / (4 * 60 * 1000)) * VideoConfig.AD_MAX_PER_4MIN))
+            # Max 1 ad per minute: duration_ms / 60000
+            max_ads = max(1, int(duration_ms / 60000))  # At least 1, no more than 1 per minute
             if len(selected_slots) >= max_ads:
                 break
+
+    # ENSURE AT LEAST 1 AD: If no slots met threshold, force select best candidate
+    if not selected_slots and candidate_slots:
+        print("[Timeline] No ad slots met threshold, forcing best candidate to ensure at least 1 ad")
+        selected_slots.append(candidate_slots[0])  # Take highest-scoring slot
 
     # Sort by timestamp for output
     selected_slots.sort(key=lambda x: x["timestamp_ms"])
 
-    return selected_slots[:4]  # Max 4 ad slots
+    return selected_slots
 
 
 def generate_chapters(
