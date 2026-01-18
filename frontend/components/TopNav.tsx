@@ -1,7 +1,7 @@
 "use client"
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import React, {useEffect} from 'react'
 import {BottomNavigation, BottomNavigationAction} from "@mui/material";
 import PartnerIcon from '@mui/icons-material/AddBusiness';
@@ -10,11 +10,28 @@ import AddIcon from '@mui/icons-material/VideoCall';
 
 export default function TopNav() {
   const pathname = usePathname() || '/'
+  const router = useRouter()
   const [value, setValue] = React.useState(0);
 
     useEffect(() => {
         console.log(value)
     }, [value]);
+
+  const handleNavigation = (newValue: number) => {
+    setValue(newValue);
+
+    // Navigate based on the selected value
+    if (newValue === 0) {
+      // My Events - go to events page
+      router.push('/events')
+    } else if (newValue === 1) {
+      // Create Clips - go to home page
+      router.push('/')
+    } else if (newValue === 2) {
+      // Partners - can be implemented later
+      console.log('Partners navigation')
+    }
+  }
 
   return (
       <div
@@ -64,10 +81,10 @@ export default function TopNav() {
               showLabels
               value={value}
               onChange={(event, newValue) => {
-                setValue(newValue);
+                handleNavigation(newValue);
               }}
               sx={{
-                height: "60px",
+                height: "80px",
                 backgroundColor: 'transparent',
                 '& .MuiBottomNavigationAction-root': {
                   color: 'rgba(255, 255, 255, 0.7)',
@@ -85,16 +102,19 @@ export default function TopNav() {
                   color: '#FAFAFA',
                 },
                 '& .MuiBottomNavigationAction-label': {
-                  color: '#FAFAFA',
+                  color: '#FAFAFA !important',
                   fontWeight: 500,
+                  fontSize: '0.875rem',
+                  marginTop: '4px',
+                  opacity: 1,
                 },
               }}
           >
-            <BottomNavigationAction label={value == 0 && "Partners"} icon={<PartnerIcon color="info" style={{fontSize: "6vh"}}/>}/>
-            <BottomNavigationAction label={value == 1 && "Create Clips"} icon={<AddIcon color="info" style={{fontSize: "6vh"}}/>} />
-                <BottomNavigationAction label={value == 2 && "Account"} icon={<AccountIcon color="info" style={{fontSize: "6vh"}}/>} />
-              </BottomNavigation>
-            </div>
-          </div>
-      )
+            <BottomNavigationAction label="My Events" icon={<AccountIcon color="info" style={{fontSize: "6vh"}}/>} />
+            <BottomNavigationAction label="Create Clips" icon={<AddIcon color="info" style={{fontSize: "6vh"}}/>} />
+            <BottomNavigationAction label="Partners" icon={<PartnerIcon color="info" style={{fontSize: "6vh"}}/>}/>
+          </BottomNavigation>
+        </div>
+      </div>
+  )
 }

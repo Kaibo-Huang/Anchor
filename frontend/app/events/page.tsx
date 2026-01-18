@@ -91,9 +91,9 @@ export default function EventsPage() {
               >
                 {/* Thumbnail / Preview */}
                 <div className="h-48 bg-gradient-to-br from-[#4078F2] to-[#2d5bd9] flex items-center justify-center relative overflow-hidden">
-                  {event.status === 'completed' && event.master_video_url ? (
+                  {(event.master_video_url || (event as any).thumbnail_url) ? (
                     <video
-                      src={event.master_video_url}
+                      src={event.master_video_url || (event as any).thumbnail_url}
                       className="w-full h-full object-cover"
                       muted
                       playsInline
