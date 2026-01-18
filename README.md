@@ -57,4 +57,4 @@ The system processes footage through a six-stage pipeline:
 * Parallelizing and batch processing video processing for TwelveLabs
 * Compressing audio and optimizing upload speed to AWS S3 Bucket
 * Making the editing/transitions not bad
-* Setting up Celery and Redis and the jobs
+* Configuring Celery workers and Redis for async video processing—managing worker memory limits for large FFmpeg jobs and preventing race conditions in real-time status updates
