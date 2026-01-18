@@ -11,11 +11,11 @@ interface VideoUploadProps {
 }
 
 const ANGLE_TYPES = [
+  { value: 'other', label: 'Auto-detect (AI)' },
   { value: 'wide', label: 'Wide Shot' },
   { value: 'closeup', label: 'Close-up' },
   { value: 'crowd', label: 'Crowd' },
   { value: 'goal_angle', label: 'Goal/Stage Angle' },
-  { value: 'other', label: 'Other' },
 ]
 
 export default function VideoUpload({ eventId, existingVideos }: VideoUploadProps) {
@@ -70,7 +70,7 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
 
     const newUploads = files.map(file => ({
       file,
-      angleType: 'wide',
+      angleType: 'other',  // Default to auto-detect (AI will classify during analysis)
       progress: 0,
       stage: null as 'preparing' | 'uploading' | 'finalizing' | null,
       status: 'pending' as const,

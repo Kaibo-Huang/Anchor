@@ -192,6 +192,26 @@ def analyze_videos_task(self, event_id: str):
                 else:
                     video_url = generate_presigned_download_url(bucket, key, expires_in=7200)
 
+                # Auto-classify angle if it's generic ("other" or "wide")
+                current_angle = video.get("angle_type", "other")
+                if current_angle in ("other", "wide"):
+                    try:
+                        from services.video_utils import extract_frame_base64
+                        from services.gemini_service import classify_video_angle
+
+                        print(f"[Worker:analyze_videos] [Thread] Auto-classifying angle for video {i + 1} (current: {current_angle})...")
+                        frame_b64 = extract_frame_base64(local_video_path, time_seconds=3.0)
+                        classified_angle = classify_video_angle(frame_b64)
+
+                        if classified_angle != current_angle:
+                            print(f"[Worker:analyze_videos] [Thread] Angle classified: {current_angle} -> {classified_angle}")
+                            supabase.table("videos").update({"angle_type": classified_angle}).eq("id", video_id).execute()
+                            video["angle_type"] = classified_angle
+                        else:
+                            print(f"[Worker:analyze_videos] [Thread] Angle confirmed as: {current_angle}")
+                    except Exception as e:
+                        print(f"[Worker:analyze_videos] [Thread] Angle classification failed: {e}, keeping {current_angle}")
+
                 return {
                     "video": video,
                     "video_url": video_url,
@@ -625,7 +645,45 @@ def generate_video_task(self, event_id: str):
                                     })
                         print(f"[Worker:generate_video] Using {len(products)} products from legacy Shopify")
                     else:
-                        print(f"[Worker:generate_video] No products connected, skipping ad generation")
+                        # Auto-select from first available store in database
+                        print(f"[Worker:generate_video] No products connected, auto-selecting from database...")
+                        from services.shopify_sync import get_first_available_store, get_store_products
+                        from services.gemini_service import match_product_to_video
+
+                        store = get_first_available_store()
+                        if store:
+                            print(f"[Worker:generate_video] Found store: {store.get('shop_name', store['shop_domain'])}")
+                            store_products = get_store_products(store["id"], limit=10)
+
+                            if store_products:
+                                # Extract video themes from analysis data for product matching
+                                video_themes = []
+                                for vp in video_paths:
+                                    analysis = vp.get("analysis_data", {})
+                                    if analysis.get("gist"):
+                                        video_themes.append(analysis["gist"])
+
+                                # Use Gemini to pick the best product
+                                best_product = match_product_to_video(
+                                    store_products,
+                                    event_data["event_type"],
+                                    video_themes if video_themes else None,
+                                )
+
+                                if best_product:
+                                    products.append({
+                                        "id": best_product["id"],
+                                        "title": best_product["title"],
+                                        "description": best_product.get("description", ""),
+                                        "price": str(best_product.get("price", "0.00")),
+                                        "image_url": best_product.get("image_url"),
+                                    })
+                                    # Set sponsor name from store
+                                    sponsor_name = store.get("shop_name") or store["shop_domain"].replace(".myshopify.com", "")
+                                    event_data["sponsor_name"] = sponsor_name
+                                    print(f"[Worker:generate_video] Auto-selected product: {best_product['title']} from {sponsor_name}")
+                        else:
+                            print(f"[Worker:generate_video] No stores in database, skipping ad generation")
 
                     if products:
                         # Generate Veo ads for each slot

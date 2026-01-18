@@ -9,6 +9,45 @@ from services.encryption import decrypt
 from services.supabase_client import get_supabase
 
 
+def get_first_available_store() -> dict | None:
+    """Get the first active store with synced products.
+
+    Returns:
+        Store dict with id, shop_domain, shop_name, or None if no stores exist
+    """
+    supabase = get_supabase()
+
+    # Get the first active store (ordered by installation date)
+    result = (
+        supabase.table("shopify_stores")
+        .select("id,shop_domain,shop_name")
+        .eq("status", "active")
+        .order("installed_at")
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        return None
+
+    store = result.data[0]
+
+    # Verify store has products
+    products_check = (
+        supabase.table("shopify_products")
+        .select("id")
+        .eq("store_id", store["id"])
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+
+    if not products_check.data:
+        return None
+
+    return store
+
+
 def fetch_shopify_products(
     shop_domain: str,
     access_token: str,

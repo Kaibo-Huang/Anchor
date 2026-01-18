@@ -74,7 +74,7 @@ class VideoConfig:
     # Timeline Duration Limits
     MAX_TOTAL_DURATION_MS = 300000      # 5 minutes max output
     MIN_SEGMENT_DURATION_MS = 8000      # Minimum 8 seconds (default fallback)
-    MAX_SEGMENT_DURATION_MS = 20000     # Maximum 20 seconds
+    MAX_SEGMENT_DURATION_MS = 12000     # Maximum 12 seconds (was 20s, reduced for more dynamic switching)
 
     # Quality Thresholds
     MIN_SEGMENT_QUALITY_SCORE = 30      # Minimum score to include segment
@@ -137,7 +137,7 @@ MIN_SEGMENT_DURATION_BY_EVENT = {
 
 # Hysteresis threshold to prevent jittery switching
 # Only switch angles if new angle scores > current * (1 + threshold)
-HYSTERESIS_THRESHOLD = 0.30  # 30% better required to switch
+HYSTERESIS_THRESHOLD = 0.18  # 18% better required to switch (was 30%, reduced for more dynamic switching)
 
 # Speaker prioritization multipliers (for speech/ceremony events)
 SPEAKER_SCORE_MULTIPLIERS = {
