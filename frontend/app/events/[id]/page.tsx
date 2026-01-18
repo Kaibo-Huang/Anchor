@@ -10,6 +10,7 @@ import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
 import AnalysisProgress from '@/components/AnalysisProgress'
 import GenerationProgress from '@/components/GenerationProgress'
+import Link from 'next/link'
 
 export default function EventPage() {
   const params = useParams()
@@ -65,16 +66,20 @@ export default function EventPage() {
 
   if (eventLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-[#4078F2] border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-[#A1A1A1] text-lg">Loading your event...</p>
+        </div>
       </div>
     )
   }
 
   if (!event) {
     return (
-      <div className="text-center py-12">
-        <h2 className="text-2xl font-semibold text-gray-900">Event not found</h2>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <h2 className="text-2xl font-semibold text-[#383A42]">Event not found</h2>
+        <Link href="/" className="text-[#4078F2] hover:underline">Return home</Link>
       </div>
     )
   }
@@ -83,112 +88,126 @@ export default function EventPage() {
   const reels = reelsData?.reels || []
   const uploadedVideos = videos.filter(v => v.status !== 'uploading')
 
-  const statusColors: Record<string, string> = {
-    created: 'bg-gray-100 text-gray-800',
-    uploading: 'bg-blue-100 text-blue-800',
-    analyzing: 'bg-yellow-100 text-yellow-800',
-    analyzed: 'bg-green-100 text-green-800',
-    generating: 'bg-purple-100 text-purple-800',
-    completed: 'bg-green-100 text-green-800',
-    failed: 'bg-red-100 text-red-800',
+  const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+    created: { bg: 'bg-[#F4F4F4]', text: 'text-[#383A42]', label: 'Ready' },
+    uploading: { bg: 'bg-[#4078F2]/10', text: 'text-[#4078F2]', label: 'Uploading' },
+    analyzing: { bg: 'bg-[#4078F2]/10', text: 'text-[#4078F2]', label: 'Analyzing' },
+    analyzed: { bg: 'bg-[#50A14F]/10', text: 'text-[#50A14F]', label: 'Analyzed' },
+    generating: { bg: 'bg-[#4078F2]/10', text: 'text-[#4078F2]', label: 'Generating' },
+    completed: { bg: 'bg-[#50A14F]/10', text: 'text-[#50A14F]', label: 'Complete' },
+    failed: { bg: 'bg-[#CA1243]/10', text: 'text-[#CA1243]', label: 'Failed' },
   }
 
+  const status = statusConfig[event.status] || statusConfig.created
+
   return (
-    <div className="space-y-8">
+    <div className="max-w-5xl mx-auto space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">{event.name}</h1>
-          <p className="text-gray-500 mt-1 capitalize">{event.event_type} Event</p>
+          <h1 className="text-4xl font-bold text-[#383A42] tracking-tight">{event.name}</h1>
+          <p className="text-[#A1A1A1] mt-2 text-lg capitalize">{event.event_type} Event</p>
         </div>
-        <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColors[event.status]}`}>
-          {event.status.charAt(0).toUpperCase() + event.status.slice(1)}
+        <span className={`px-4 py-2 rounded-full text-sm font-semibold ${status.bg} ${status.text}`}>
+          {status.label}
         </span>
       </div>
 
       {shopifyConnected && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <p className="text-green-800">Shopify store connected successfully!</p>
+        <div className="bg-[#50A14F]/10 border border-[#50A14F]/20 rounded-2xl p-4">
+          <p className="text-[#50A14F] font-medium">Shopify store connected successfully!</p>
         </div>
       )}
 
       {/* Main Video Player (when completed) */}
       {event.status === 'completed' && event.master_video_url && (
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Final Video</h2>
-          <VideoPlayer url={event.master_video_url} />
+        <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+          <h2 className="text-2xl font-bold text-[#383A42] mb-6">Final Video</h2>
+          <div className="rounded-2xl overflow-hidden">
+            <VideoPlayer url={event.master_video_url} />
+          </div>
         </div>
       )}
 
       {/* Progress Steps */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-semibold mb-6">Production Pipeline</h2>
-        <div className="space-y-4">
+      <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+        <h2 className="text-2xl font-bold text-[#383A42] mb-8">Production Pipeline</h2>
+        <div className="space-y-6">
           {/* Step 1: Upload */}
-          <div className="flex items-start gap-4">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
-              uploadedVideos.length > 0 ? 'bg-green-500' : 'bg-gray-300'
+          <div className="flex items-start gap-5">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold shrink-0 ${
+              uploadedVideos.length > 0 ? 'bg-[#50A14F]' : 'bg-[#E5E5E5]'
             }`}>
-              {uploadedVideos.length > 0 ? '✓' : '1'}
+              {uploadedVideos.length > 0 ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : '1'}
             </div>
-            <div className="flex-1">
-              <h3 className="font-medium">Upload Videos</h3>
-              <p className="text-sm text-gray-500">
+            <div className="flex-1 pt-1">
+              <h3 className="font-semibold text-[#383A42] text-lg">Upload Videos</h3>
+              <p className="text-[#A1A1A1] mt-1">
                 {uploadedVideos.length} video{uploadedVideos.length !== 1 ? 's' : ''} uploaded
               </p>
             </div>
           </div>
 
           {/* Step 2: Analyze */}
-          <div className="flex items-start gap-4">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
+          <div className="flex items-start gap-5">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold shrink-0 transition-all ${
               event.status === 'analyzed' || event.status === 'generating' || event.status === 'completed'
-                ? 'bg-green-500'
+                ? 'bg-[#50A14F]'
                 : event.status === 'analyzing'
-                ? 'bg-yellow-500 animate-pulse'
-                : 'bg-gray-300'
+                ? 'bg-[#4078F2] animate-pulse'
+                : 'bg-[#E5E5E5]'
             }`}>
-              {event.status === 'analyzed' || event.status === 'generating' || event.status === 'completed' ? '✓' : '2'}
+              {event.status === 'analyzed' || event.status === 'generating' || event.status === 'completed' ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : '2'}
             </div>
-            <div className="flex-1">
-              <h3 className="font-medium">AI Analysis</h3>
-              <p className="text-sm text-gray-500">
+            <div className="flex-1 pt-1">
+              <h3 className="font-semibold text-[#383A42] text-lg">AI Analysis</h3>
+              <p className="text-[#A1A1A1] mt-1">
                 {event.status === 'analyzing' ? 'Analyzing with TwelveLabs...' : 'Scene detection, objects, actions'}
               </p>
-              {/* Detailed Progress Bar */}
               <AnalysisProgress progress={event.analysis_progress} status={event.status} />
             </div>
           </div>
 
           {/* Step 3: Generate */}
-          <div className="flex items-start gap-4">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
+          <div className="flex items-start gap-5">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold shrink-0 transition-all ${
               event.status === 'completed'
-                ? 'bg-green-500'
+                ? 'bg-[#50A14F]'
                 : event.status === 'generating'
-                ? 'bg-purple-500 animate-pulse'
-                : 'bg-gray-300'
+                ? 'bg-[#4078F2] animate-pulse'
+                : 'bg-[#E5E5E5]'
             }`}>
-              {event.status === 'completed' ? '✓' : '3'}
+              {event.status === 'completed' ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : '3'}
             </div>
-            <div className="flex-1">
-              <h3 className="font-medium">Generate Video</h3>
-              <p className="text-sm text-gray-500">
+            <div className="flex-1 pt-1">
+              <h3 className="font-semibold text-[#383A42] text-lg">Generate Video</h3>
+              <p className="text-[#A1A1A1] mt-1">
                 {event.status === 'generating' ? 'Rendering final video...' : 'Multi-angle switching, zooms, music'}
               </p>
-              {/* Detailed Progress Bar for Generation */}
               <GenerationProgress progress={event.generation_progress} status={event.status} />
             </div>
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="mt-6 flex gap-4">
+        <div className="mt-8 flex gap-4">
           {event.status === 'created' && uploadedVideos.length > 0 && (
             <button
               onClick={() => analyzeMutation.mutate()}
               disabled={analyzeMutation.isPending}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              className="px-6 py-3 bg-[#4078F2] text-white rounded-xl font-semibold hover:bg-[#2d5bd9] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {analyzeMutation.isPending ? 'Starting...' : 'Start Analysis'}
             </button>
@@ -198,7 +217,7 @@ export default function EventPage() {
             <button
               onClick={() => generateMutation.mutate()}
               disabled={generateMutation.isPending}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              className="px-6 py-3 bg-[#4078F2] text-white rounded-xl font-semibold hover:bg-[#2d5bd9] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generateMutation.isPending ? 'Starting...' : 'Generate Final Video'}
             </button>
@@ -208,7 +227,7 @@ export default function EventPage() {
             <button
               onClick={() => regenerateMutation.mutate()}
               disabled={regenerateMutation.isPending}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              className="px-6 py-3 bg-white text-[#4078F2] border-2 border-[#4078F2] rounded-xl font-semibold hover:bg-[#4078F2]/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {regenerateMutation.isPending ? 'Re-rendering...' : 'Re-render Video'}
             </button>
@@ -218,7 +237,7 @@ export default function EventPage() {
             <button
               onClick={() => analyzeMutation.mutate()}
               disabled={analyzeMutation.isPending}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+              className="px-6 py-3 bg-[#CA1243] text-white rounded-xl font-semibold hover:bg-[#a80f37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {analyzeMutation.isPending ? 'Retrying...' : 'Retry Analysis'}
             </button>
@@ -228,30 +247,33 @@ export default function EventPage() {
 
       {/* Video Upload Section */}
       {(event.status === 'created' || event.status === 'uploading') && (
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Upload Videos</h2>
+        <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+          <h2 className="text-2xl font-bold text-[#383A42] mb-6">Upload Videos</h2>
           <VideoUpload eventId={eventId} existingVideos={videos} />
         </div>
       )}
 
       {/* Music Upload */}
       {event.status !== 'completed' && (
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Personal Music (Optional)</h2>
+        <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+          <h2 className="text-2xl font-bold text-[#383A42] mb-6">Personal Music</h2>
+          <p className="text-[#A1A1A1] mb-4">Add your own soundtrack to make it personal</p>
           <MusicUpload eventId={eventId} currentMusicUrl={event.music_url} />
         </div>
       )}
 
       {/* Shopify Integration */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-semibold mb-4">Shopify Integration</h2>
+      <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+        <h2 className="text-2xl font-bold text-[#383A42] mb-6">Shopify Integration</h2>
+        <p className="text-[#A1A1A1] mb-4">Connect your store for native product ads</p>
         <ShopifyConnect eventId={eventId} connectedUrl={event.shopify_store_url} />
       </div>
 
       {/* Personal Highlight Reels */}
       {(event.status === 'analyzed' || event.status === 'completed') && (
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Create Your Highlight Reel</h2>
+        <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+          <h2 className="text-2xl font-bold text-[#383A42] mb-6">Create Your Highlight Reel</h2>
+          <p className="text-[#A1A1A1] mb-4">Find yourself in the footage with natural language search</p>
           <PersonalReelGenerator eventId={eventId} reels={reels} />
         </div>
       )}

@@ -86,19 +86,19 @@ export default function LayoutClient({
   const pathname = usePathname?.() ?? ''
   const isHomePage = pathname === '/'
 
-  const bodyClass = isHomePage ? 'min-h-screen bg-white text-gray-900' : 'min-h-screen bg-gray-50 text-black'
+  const bodyClass = isHomePage ? 'min-h-screen bg-white text-gray-900' : 'min-h-screen bg-[#FAFAFA] text-[#383A42]'
 
   return (
     <body className={`${bodyClass} overflow-x-hidden`}>
       <QueryClientProvider client={queryClient}>
         {!isHomePage && (
-          <nav className="bg-white shadow-sm border-b">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="flex justify-between h-16 items-center">
-                <Link href="/" className="text-xl font-bold text-indigo-600">
-                  Anchor
+          <nav className="bg-white border-b border-[#E5E5E5]">
+            <div className="max-w-5xl mx-auto px-6 lg:px-8">
+              <div className="flex justify-between h-20 items-center">
+                <Link href="/" className="flex items-center gap-3 group">
+                  <img src="/Anchor FInal.svg" alt="Anchor" className="h-8 w-auto" />
                 </Link>
-                <div className="text-sm text-gray-500">AI-Powered Video Production</div>
+                <div className="text-sm font-medium text-[#A1A1A1]">AI-Powered Video Production</div>
               </div>
             </div>
           </nav>
@@ -109,7 +109,7 @@ export default function LayoutClient({
               {children}
             </main>
           ) : (
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">{children}</main>
+            <main className="px-6 lg:px-8 py-10">{children}</main>
           )}
         </ThemeProvider>
       </QueryClientProvider>
