@@ -273,7 +273,7 @@ export default function PrimaryCreate() {
                                     value={chatInput}
                                     onChange={(e) => setChatInput(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="Describe your video... (e.g., 'A highlight reel with exciting moments and upbeat music')"
+                                    placeholder="e.g., 'Find my best moments from the game' or 'Create a highlight reel with high energy'"
                                     multiline
                                     fullWidth
                                     variant="outlined"
