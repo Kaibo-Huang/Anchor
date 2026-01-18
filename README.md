@@ -69,3 +69,7 @@ Building out such a cool idea
 * Batching + parallelizing processes at a large scale
 * FFmpeg for video editing and putting videos together
 * Audio syncing using librosa audio fingerprinting
+## What's next for Anchor
+
+* Better scalability so we can launch to the public
+* Speeding up editing + video processing
