@@ -78,29 +78,44 @@ def compress_video_for_twelvelabs(
     print(f"[VideoCompress] Target video bitrate: {video_bitrate} kbps")
     print(f"[VideoCompress] Audio bitrate: {audio_bitrate} kbps")
 
-    # Use CRF-based encoding with maxrate constraint for better quality
-    # This is faster than two-pass and gives good results
+    # Use Apple VideoToolbox hardware encoder for 10x faster encoding on Mac
+    # Falls back to libx264 if VideoToolbox unavailable
     cmd = [
         "ffmpeg",
         "-i", input_path,
-        "-c:v", "libx264",
-        "-preset", "fast",  # Balance between speed and compression
-        "-crf", "23",  # Quality level (lower = better, 18-28 is typical)
-        "-maxrate", f"{video_bitrate}k",
-        "-bufsize", f"{video_bitrate * 2}k",
+        "-c:v", "h264_videotoolbox",  # Hardware encoder on Apple Silicon
+        "-b:v", f"{video_bitrate}k",  # VideoToolbox uses bitrate, not CRF
         "-c:a", "aac",
         "-b:a", f"{audio_bitrate}k",
-        "-movflags", "+faststart",  # Enable streaming
-        "-y",  # Overwrite output
+        "-movflags", "+faststart",
+        "-y",
         output_path
     ]
 
-    print(f"[VideoCompress] Running FFmpeg compression...")
+    print(f"[VideoCompress] Running FFmpeg compression with VideoToolbox...")
     result = subprocess.run(cmd, capture_output=True, text=True)
 
+    # Fall back to libx264 if VideoToolbox fails
     if result.returncode != 0:
-        print(f"[VideoCompress] FFmpeg error: {result.stderr}")
-        raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
+        print(f"[VideoCompress] VideoToolbox failed, falling back to libx264...")
+        cmd = [
+            "ffmpeg",
+            "-i", input_path,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",  # Fastest software encoding
+            "-crf", "23",
+            "-maxrate", f"{video_bitrate}k",
+            "-bufsize", f"{video_bitrate * 2}k",
+            "-c:a", "aac",
+            "-b:a", f"{audio_bitrate}k",
+            "-movflags", "+faststart",
+            "-y",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"[VideoCompress] FFmpeg error: {result.stderr}")
+            raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
 
     output_size = get_file_size(output_path)
     output_size_gb = output_size / (1024 * 1024 * 1024)
@@ -133,14 +148,12 @@ def compress_video_aggressive(
 
     print(f"[VideoCompress] Aggressive mode - bitrate: {video_bitrate} kbps")
 
+    # Try VideoToolbox first, fall back to libx264
     cmd = [
         "ffmpeg",
         "-i", input_path,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "28",  # Lower quality
-        "-maxrate", f"{video_bitrate}k",
-        "-bufsize", f"{video_bitrate * 2}k",
+        "-c:v", "h264_videotoolbox",
+        "-b:v", f"{video_bitrate}k",
         "-vf", "scale=-2:720",  # Scale to 720p max
         "-c:a", "aac",
         "-b:a", f"{audio_bitrate}k",
@@ -152,7 +165,25 @@ def compress_video_aggressive(
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg aggressive compression failed: {result.stderr}")
+        # Fall back to libx264
+        cmd = [
+            "ffmpeg",
+            "-i", input_path,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-maxrate", f"{video_bitrate}k",
+            "-bufsize", f"{video_bitrate * 2}k",
+            "-vf", "scale=-2:720",
+            "-c:a", "aac",
+            "-b:a", f"{audio_bitrate}k",
+            "-movflags", "+faststart",
+            "-y",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg aggressive compression failed: {result.stderr}")
 
     output_size_gb = get_file_size(output_path) / (1024 * 1024 * 1024)
     print(f"[VideoCompress] Aggressive output size: {output_size_gb:.2f} GB")
