@@ -35,3 +35,20 @@ Here's how it works:
    - Intelligently switches between angles like a professional broadcast director
    - Syncs scene changes to the beat drops of your music
    - Integrates sponsor ads that look like TV commercials, not annoying popups
+
+## How we built it
+
+The system processes footage through a six-stage pipeline:
+
+1. **Upload & Sync**: Users upload videos directly to AWS S3 using presigned URLs. Videos are time-aligned using device metadata for rough sync, then refined with librosa audio fingerprinting.
+
+2. **TwelveLabs Analysis**: TwelveLabs indexes each video using Marengo 3.0 for visual/audio analysis and Pegasus 1.2 for embedding generation. Users query with natural language and TwelveLabs semantic search returns timestamps to relevant clips.
+
+3. **Intelligent Editing**: For every 2-second interval, the system scores each camera angle by combining embedding similarity to the user's desired vibe with event-specific rules. The highest-scoring angle is selected with minimum 4-second holds between switches. If music is uploaded, librosa detects beats and snaps cuts to the nearest beat drop.
+
+4. **Async Processing**: Celery workers with Redis handle long-running jobs. Supabase Realtime broadcasts processing status via WebSocket so users see live progress.
+
+5. **Video Assembly**: FFmpeg renders the final output by cutting clips using TwelveLabs timestamps, applying zoom on high-action moments, concatenating with crossfades, and mixing audio with intelligent ducking during speech.
+
+6. **Native Sponsorships**: Google Veo generates product videos matching the footage's visual style. These are inserted at natural transition points using FFmpeg crossfades. Products are fetched from connected Shopify stores via OAuth.
+```
