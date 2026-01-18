@@ -69,7 +69,20 @@ class VideoConfig:
     ZOOM_FACTOR_MED = 1.8
 
     # Angle Switching
-    MIN_ANGLE_DURATION_MS = 4000
+    MIN_ANGLE_DURATION_MS = 2000
+
+    # Timeline Duration Limits
+    MAX_TOTAL_DURATION_MS = 300000      # 5 minutes max output
+    MIN_SEGMENT_DURATION_MS = 2000      # Minimum 2 seconds
+    MAX_SEGMENT_DURATION_MS = 8000      # Maximum 8 seconds
+
+    # Quality Thresholds
+    MIN_SEGMENT_QUALITY_SCORE = 30      # Minimum score to include segment
+    HIGH_QUALITY_THRESHOLD = 60         # Score that allows extended segments
+
+    # Softer Rotation (replaces rigid +50/-15)
+    ROTATION_BONUS_BASE = 20            # Reduced from 50
+    ROTATION_PENALTY = 10               # Reduced from 15
 
     # Music Integration
     MUSIC_BEAT_SYNC_TOLERANCE_MS = 200
