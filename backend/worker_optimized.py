@@ -484,6 +484,28 @@ def generate_video_task(self, event_id: str):
             print(f"[Worker:generate_video]   - Ad slots: {len(timeline.get('ad_slots', []))}")
             print(f"[Worker:generate_video]   - Chapters: {len(timeline.get('chapters', []))}")
 
+            # Apply beat sync if music metadata is available
+            if event_data.get("music_metadata"):
+                beat_times = event_data["music_metadata"].get("beat_times_ms", [])
+                if beat_times:
+                    from services.music_sync import align_cuts_to_beats
+                    original_count = len(timeline["segments"])
+                    timeline["segments"] = align_cuts_to_beats(timeline["segments"], beat_times)
+                    synced_count = sum(1 for s in timeline["segments"] if s.get("beat_synced", False))
+                    print(f"[Worker:generate_video] Beat-synced {synced_count}/{original_count} segment cuts to music")
+
+            # Validate timeline before proceeding
+            from services.render import validate_timeline_for_render
+            video_map = {v["id"]: v for v in video_paths}
+            is_valid, validation_errors = validate_timeline_for_render(timeline.get("segments", []), video_map)
+            if not is_valid:
+                print(f"[Worker:generate_video] WARNING: Timeline validation failed with {len(validation_errors)} errors")
+                for err in validation_errors[:5]:  # Log first 5 errors
+                    print(f"[Worker:generate_video]   - {err}")
+                # Continue anyway but log warning - the render may still succeed
+            else:
+                print(f"[Worker:generate_video] Timeline validation passed")
+
             # Store timeline (upsert with event_id as conflict key)
             supabase.table("timelines").upsert(
                 {
