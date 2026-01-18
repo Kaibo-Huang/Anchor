@@ -68,8 +68,8 @@ export async function analyzeEvent(eventId: string): Promise<{ message: string; 
   })
 }
 
-export async function generateVideo(eventId: string): Promise<{ message: string; event_id: string }> {
-  return apiRequest(`/api/events/${eventId}/generate`, {
+export async function generateVideo(eventId: string, force: boolean = false): Promise<{ message: string; event_id: string }> {
+  return apiRequest(`/api/events/${eventId}/generate?force=${force}`, {
     method: 'POST',
   })
 }

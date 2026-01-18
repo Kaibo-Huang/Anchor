@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from services.supabase_client import get_supabase
+from services.s3_client import generate_presigned_download_url, parse_s3_uri
 
 router = APIRouter()
 
@@ -87,7 +88,18 @@ async def list_reels(event_id: str):
         .execute()
     )
 
-    return {"reels": result.data}
+    # Convert S3 URIs to presigned URLs
+    reels = result.data
+    for reel in reels:
+        if reel.get("output_url") and reel["output_url"].startswith("s3://"):
+            try:
+                bucket, key = parse_s3_uri(reel["output_url"])
+                # Generate presigned URL valid for 24 hours
+                reel["output_url"] = generate_presigned_download_url(bucket, key, expires_in=86400)
+            except Exception as e:
+                print(f"[Reels] Error generating presigned URL for reel {reel['id']}: {e}")
+
+    return {"reels": reels}
 
 
 @router.get("/{event_id}/reels/{reel_id}")
@@ -106,4 +118,15 @@ async def get_reel(event_id: str, reel_id: str):
     if not result.data:
         raise HTTPException(status_code=404, detail="Reel not found")
 
-    return result.data[0]
+    reel = result.data[0]
+
+    # Convert S3 URI to presigned URL
+    if reel.get("output_url") and reel["output_url"].startswith("s3://"):
+        try:
+            bucket, key = parse_s3_uri(reel["output_url"])
+            # Generate presigned URL valid for 24 hours
+            reel["output_url"] = generate_presigned_download_url(bucket, key, expires_in=86400)
+        except Exception as e:
+            print(f"[Reels] Error generating presigned URL for reel {reel['id']}: {e}")
+
+    return reel

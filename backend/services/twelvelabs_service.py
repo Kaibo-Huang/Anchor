@@ -125,18 +125,25 @@ def search_videos(
     results = client.search.query(
         index_id=index_id,
         query_text=query,
-        options=search_options,
+        search_options=search_options,
         page_limit=limit,
     )
 
     # Transform results to our format
+    # Note: results is a SyncPager, iterate directly over it
+    # Confidence is a string: "high", "medium", "low"
+    confidence_map = {"high": 0.9, "medium": 0.6, "low": 0.3}
     moments = []
-    for clip in results.data:
+    for clip in results:
+        # Convert confidence string to numeric score
+        confidence_str = str(clip.confidence).lower()
+        confidence_score = confidence_map.get(confidence_str, 0.5)
+
         moments.append({
             "video_id": clip.video_id,
-            "start": clip.start,
-            "end": clip.end,
-            "confidence": clip.confidence,
+            "start": float(clip.start),
+            "end": float(clip.end),
+            "confidence": confidence_score,
             "metadata": clip.metadata if hasattr(clip, "metadata") else {},
         })
 

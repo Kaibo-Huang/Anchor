@@ -55,6 +55,13 @@ export default function EventPage() {
     },
   })
 
+  const regenerateMutation = useMutation({
+    mutationFn: () => generateVideo(eventId, true), // force=true
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['event', eventId] })
+    },
+  })
+
   if (eventLoading) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -191,6 +198,16 @@ export default function EventPage() {
               className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
             >
               {generateMutation.isPending ? 'Starting...' : 'Generate Final Video'}
+            </button>
+          )}
+
+          {event.status === 'completed' && (
+            <button
+              onClick={() => regenerateMutation.mutate()}
+              disabled={regenerateMutation.isPending}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            >
+              {regenerateMutation.isPending ? 'Re-rendering...' : 'Re-render Video'}
             </button>
           )}
 
