@@ -427,6 +427,12 @@ export default function PrimaryCreate() {
                             }}
                             sx={{
                                 minWidth: '22vw',
+                                '& .MuiOutlinedInput-root': {
+                                    '& textarea': {
+                                        color: 'white',
+                                        caretColor: 'white',
+                                    },
+                                },
                                 '& .MuiOutlinedInput-input': {
                                     color: 'white',
                                     caretColor: 'white',
