@@ -155,7 +155,7 @@ def analyze_videos_task(self, event_id: str):
 
         # ============ OPTIMIZATION 1: PARALLEL DOWNLOAD & COMPRESS ============
         print(f"[Worker:analyze_videos] ---------- PARALLEL DOWNLOAD & COMPRESS ----------")
-        update_analysis_progress(supabase, event_id, "downloading", 0.0, 0, total_videos, f"Preparing {total_videos} videos for analysis...")
+        update_analysis_progress(supabase, event_id, "downloading", 0.0, 0, total_videos, f"Fetching {total_videos} videos from cloud storage (parallel download)...")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             def download_and_prepare_video(video_data):
@@ -209,11 +209,20 @@ def analyze_videos_task(self, event_id: str):
                     result = future.result()
                     video_tasks.append(result)
                     download_completed += 1
+
+                    # More descriptive download messages
+                    if download_completed == 1:
+                        message = f"Downloaded video 1/{total_videos} from S3 - checking for compression..."
+                    elif download_completed < total_videos:
+                        message = f"Parallel download: {download_completed}/{total_videos} videos ready for TwelveLabs..."
+                    else:
+                        message = f"All {total_videos} videos downloaded - preparing to submit to AI analysis..."
+
                     update_analysis_progress(
                         supabase, event_id, "downloading",
                         download_completed / total_videos,
                         download_completed, total_videos,
-                        f"Downloaded {download_completed}/{total_videos} videos..."
+                        message
                     )
 
             # Sort by original index to maintain order
@@ -225,7 +234,7 @@ def analyze_videos_task(self, event_id: str):
             update_analysis_progress(
                 supabase, event_id, "indexing",
                 0.0, 0, total_videos,
-                "Starting AI analysis with TwelveLabs Marengo 2.7..."
+                f"Submitting {total_videos} videos to TwelveLabs Marengo 2.7 for AI analysis..."
             )
 
             pending_tasks = []
@@ -240,6 +249,13 @@ def analyze_videos_task(self, event_id: str):
                 })
 
             print(f"[Worker:analyze_videos] All {len(pending_tasks)} videos submitted!")
+
+            # Update progress after submission
+            update_analysis_progress(
+                supabase, event_id, "indexing",
+                0.05, 0, total_videos,
+                f"All {total_videos} videos queued - TwelveLabs AI processing in parallel..."
+            )
 
             # ============ OPTIMIZATION 2: PARALLEL WAIT FOR INDEXING ============
             print(f"[Worker:analyze_videos] ---------- PARALLEL WAIT FOR INDEXING ----------")
@@ -271,11 +287,20 @@ def analyze_videos_task(self, event_id: str):
                     if result:
                         completed_tasks.append(result)
                         indexing_completed += 1
+
+                        # More descriptive progress message
+                        if indexing_completed == 1:
+                            message = f"TwelveLabs Marengo 2.7 analyzing video 1/{total_videos} - extracting scenes, objects, actions..."
+                        elif indexing_completed < total_videos:
+                            message = f"TwelveLabs processing video {indexing_completed}/{total_videos} - detecting faces, audio events, emotions..."
+                        else:
+                            message = f"All {total_videos} videos indexed with TwelveLabs AI - scene detection complete!"
+
                         update_analysis_progress(
                             supabase, event_id, "indexing",
                             indexing_completed / total_videos,
                             indexing_completed, total_videos,
-                            f"TwelveLabs indexed {indexing_completed}/{total_videos} videos..."
+                            message
                         )
 
             print(f"[Worker:analyze_videos] All {len(completed_tasks)} videos indexed!")
@@ -285,7 +310,7 @@ def analyze_videos_task(self, event_id: str):
             update_analysis_progress(
                 supabase, event_id, "embeddings",
                 0.0, 0, total_videos,
-                "Creating semantic embeddings for intelligent search..."
+                "Creating semantic embeddings with Pegasus 1.2 for natural language search..."
             )
 
             def generate_embeddings_for_video(ct):
@@ -299,13 +324,23 @@ def analyze_videos_task(self, event_id: str):
                 for future in as_completed(futures):
                     result = future.result()
                     results.append(result)
+
+                    # More descriptive progress message
+                    segment_count = len(result.get('embeddings', []))
+                    if len(results) == 1:
+                        message = f"Pegasus embeddings: video 1/{total_videos} ({segment_count} segments) - enabling 'find me' search..."
+                    elif len(results) < total_videos:
+                        message = f"Embedding video {len(results)}/{total_videos} ({segment_count} segments) - building semantic search index..."
+                    else:
+                        message = f"All {total_videos} videos embedded - ready for personalized highlight reels!"
+
                     update_analysis_progress(
                         supabase, event_id, "embeddings",
                         len(results) / total_videos,
                         len(results), total_videos,
-                        f"Generated embeddings for {len(results)}/{total_videos} videos..."
+                        message
                     )
-                    print(f"[Worker:analyze_videos] Embeddings complete for video {result['index'] + 1}: {len(result['embeddings'])} segments")
+                    print(f"[Worker:analyze_videos] Embeddings complete for video {result['index'] + 1}: {segment_count} segments")
 
             # Store all results
             print(f"[Worker:analyze_videos] ---------- SAVING RESULTS ----------")

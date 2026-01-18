@@ -18,11 +18,10 @@ interface ProcessingLogsProps {
   eventStatus: string
 }
 
-// Analysis stages in order
+// Analysis stages in order (must match backend worker stages)
 const ANALYSIS_STAGES = [
   { key: 'initializing', label: 'Initializing', description: 'Setting up AI analysis environment' },
   { key: 'downloading', label: 'Downloading', description: 'Fetching videos from storage' },
-  { key: 'compressing', label: 'Compressing', description: 'Optimizing video files for analysis' },
   { key: 'indexing', label: 'Indexing', description: 'Processing with TwelveLabs AI' },
   { key: 'embeddings', label: 'Embeddings', description: 'Creating semantic embeddings' },
   { key: 'saving', label: 'Saving', description: 'Storing analysis results' },
@@ -88,8 +87,9 @@ export default function ProcessingLogs({
           }
         }
 
-        // Only add logs for stages that have started
-        if (status !== 'pending') {
+        // Show all stages that have started (completed + in_progress)
+        // Also show the next pending stage to give context
+        if (status !== 'pending' || index === currentStageIndex + 1) {
           newLogs.push({
             id: `analysis-${stage.key}`,
             timestamp: now,
@@ -127,8 +127,9 @@ export default function ProcessingLogs({
           }
         }
 
-        // Only add logs for stages that have started
-        if (status !== 'pending') {
+        // Show all stages that have started (completed + in_progress)
+        // Also show the next pending stage to give context
+        if (status !== 'pending' || index === currentStageIndex + 1) {
           newLogs.push({
             id: `generation-${stage.key}`,
             timestamp: now,
@@ -162,7 +163,8 @@ export default function ProcessingLogs({
     return null
   }
 
-  if (logs.length === 0) {
+  // Show logs even if empty during analyzing/generating to indicate activity
+  if (logs.length === 0 && eventStatus !== 'analyzing' && eventStatus !== 'generating') {
     return null
   }
 
@@ -201,7 +203,13 @@ export default function ProcessingLogs({
         className="h-64 overflow-y-auto p-4 font-mono text-sm"
         onScroll={handleScroll}
       >
-        {logs.map((log, index) => (
+        {logs.length === 0 ? (
+          <div className="flex items-center gap-3 text-[#A1A1A1]">
+            <div className="w-4 h-4 border-2 border-[#4078F2] border-t-transparent rounded-full animate-spin"></div>
+            <span>Initializing {eventStatus === 'analyzing' ? 'analysis' : 'generation'}...</span>
+          </div>
+        ) : (
+          logs.map((log, index) => (
           <div
             key={log.id}
             className={`flex items-start gap-3 py-1.5 ${
@@ -254,7 +262,7 @@ export default function ProcessingLogs({
               {log.message}
             </span>
           </div>
-        ))}
+        )))}
         <div ref={logsEndRef} />
       </div>
     </div>
