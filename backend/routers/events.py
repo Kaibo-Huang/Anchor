@@ -57,6 +57,25 @@ async def list_events(limit: int = 50, offset: int = 0):
             except Exception:
                 master_video_url = event["master_video_url"]
 
+        # Get first uploaded video as thumbnail preview if no master video
+        thumbnail_url = None
+        if not master_video_url:
+            videos_result = (
+                supabase.table("videos")
+                .select("original_url")
+                .eq("event_id", event["id"])
+                .eq("status", "uploaded")
+                .order("created_at")
+                .limit(1)
+                .execute()
+            )
+            if videos_result.data:
+                try:
+                    bucket, key = parse_s3_uri(videos_result.data[0]["original_url"])
+                    thumbnail_url = generate_presigned_download_url(bucket, key)
+                except Exception:
+                    thumbnail_url = videos_result.data[0]["original_url"]
+
         events.append({
             "id": event["id"],
             "name": event["name"],
@@ -66,6 +85,7 @@ async def list_events(limit: int = 50, offset: int = 0):
             "shopify_store_url": event.get("shopify_store_url"),
             "sponsor_name": event.get("sponsor_name"),
             "master_video_url": master_video_url,
+            "thumbnail_url": thumbnail_url,
             "music_url": event.get("music_url"),
             "created_at": event.get("created_at"),
         })

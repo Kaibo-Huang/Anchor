@@ -91,17 +91,40 @@ export default function EventsPage() {
               >
                 {/* Thumbnail / Preview */}
                 <div className="h-48 bg-gradient-to-br from-[#4078F2] to-[#2d5bd9] flex items-center justify-center relative overflow-hidden">
-                  {event.status === 'completed' && event.master_video_url ? (
+                  {(event.master_video_url || (event as any).thumbnail_url) ? (
                     <video
-                      src={event.master_video_url}
+                      key={event.id}
+                      src={event.master_video_url || (event as any).thumbnail_url}
                       className="w-full h-full object-cover"
                       muted
                       playsInline
-                      onMouseOver={(e) => (e.target as HTMLVideoElement).play()}
+                      preload="metadata"
+                      crossOrigin="anonymous"
+                      onLoadedMetadata={(e) => {
+                        // Seek to 0.5s to ensure a frame is displayed as thumbnail
+                        const video = e.target as HTMLVideoElement
+                        video.currentTime = 0.5
+                      }}
+                      onMouseOver={(e) => {
+                        const video = e.target as HTMLVideoElement
+                        video.play().catch(() => {
+                          // Ignore AbortError when user moves mouse away quickly
+                        })
+                      }}
                       onMouseOut={(e) => {
                         const video = e.target as HTMLVideoElement
                         video.pause()
-                        video.currentTime = 0
+                        video.currentTime = 0.5
+                      }}
+                      onError={(e) => {
+                        // Hide video and show fallback icon on error
+                        const video = e.target as HTMLVideoElement
+                        video.style.display = 'none'
+                        // Show fallback icon by adding a sibling element
+                        const fallback = document.createElement('span')
+                        fallback.className = 'text-6xl filter drop-shadow-lg'
+                        fallback.textContent = eventTypeIcons[event.event_type] || '📹'
+                        video.parentElement?.appendChild(fallback)
                       }}
                     />
                   ) : (

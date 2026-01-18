@@ -239,7 +239,7 @@ export default function EventPage() {
             <button
               onClick={() => regenerateMutation.mutate()}
               disabled={regenerateMutation.isPending}
-              className={`px-6 py-3 bg-white text-[#4078F2] border-2 border-[#4078F2] rounded-xl font-semibold hover:bg-[#4078F2]/5 transition-colors disabled:opacity-50 ${regenerateMutation.isPending ? 'cursor-pointer' : 'disabled:cursor-not-allowed'}`}
+              className={`px-6 py-3 bg-white text-[#4078F2] border-2 border-[#4078F2] rounded-xl font-semibold hover:bg-[#4078F2]/5 transition-colors disabled:opacity-50 ${!regenerateMutation.isPending ? 'cursor-pointer' : 'disabled:cursor-not-allowed'}`}
             >
               {regenerateMutation.isPending ? 'Re-rendering...' : 'Re-render Video'}
             </button>
