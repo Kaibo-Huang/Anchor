@@ -86,9 +86,9 @@ def index_video(index_id: str, video_url: str, wait: bool = True) -> Any:
     print(f"[TwelveLabs] Task created: {task_id}")
 
     if wait and task_id:
-        print(f"[TwelveLabs] Waiting for indexing to complete (polling every 5s)...")
+        print(f"[TwelveLabs] Waiting for indexing to complete (polling every 2s)...")
         # Use client.tasks.wait_for_done() instead of task.wait_for_done()
-        completed_task = client.tasks.wait_for_done(task_id=task_id, sleep_interval=5)
+        completed_task = client.tasks.wait_for_done(task_id=task_id, sleep_interval=2)
         print(f"[TwelveLabs] Indexing complete! Video ID: {completed_task.video_id if hasattr(completed_task, 'video_id') else 'N/A'}")
         return completed_task
     else:
@@ -170,7 +170,7 @@ def create_video_embeddings(video_url: str) -> list[dict]:
 
     # Use client.embed.tasks.wait_for_done() instead of task.wait_for_done()
     if task_id:
-        completed_task = client.embed.tasks.wait_for_done(task_id=task_id, sleep_interval=5)
+        completed_task = client.embed.tasks.wait_for_done(task_id=task_id, sleep_interval=2)
     else:
         completed_task = task
     print(f"[TwelveLabs] Embedding task complete")

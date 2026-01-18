@@ -1,13 +1,156 @@
 """FFmpeg rendering service for video composition and output."""
 
 import os
+import platform
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 import ffmpeg
 
 from config import VideoConfig, MUSIC_MIX_PROFILES
+
+# Number of parallel segment extractions (balance between speed and system load)
+MAX_PARALLEL_EXTRACTIONS = 4
+
+
+# Hardware acceleration settings
+# On macOS, use VideoToolbox for ~5-10x faster encoding
+# Falls back to libx264 if hardware encoder fails
+_HWACCEL_AVAILABLE: bool | None = None
+
+
+def _check_hwaccel_available() -> bool:
+    """Check if hardware acceleration is available."""
+    global _HWACCEL_AVAILABLE
+    if _HWACCEL_AVAILABLE is not None:
+        return _HWACCEL_AVAILABLE
+
+    if platform.system() != "Darwin":
+        _HWACCEL_AVAILABLE = False
+        return False
+
+    # Check if h264_videotoolbox encoder is available
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        _HWACCEL_AVAILABLE = "h264_videotoolbox" in result.stdout
+        if _HWACCEL_AVAILABLE:
+            print("[Render] Hardware acceleration available: h264_videotoolbox")
+        return _HWACCEL_AVAILABLE
+    except Exception:
+        _HWACCEL_AVAILABLE = False
+        return False
+
+
+def _get_video_codec() -> str:
+    """Get the best available video codec."""
+    if _check_hwaccel_available():
+        return "h264_videotoolbox"
+    return "libx264"
+
+
+def _get_encoding_params(use_hw: bool = True) -> dict:
+    """Get encoding parameters based on available hardware.
+
+    Args:
+        use_hw: Whether to attempt hardware encoding
+
+    Returns:
+        Dict of ffmpeg output parameters
+    """
+    if use_hw and _check_hwaccel_available():
+        # VideoToolbox parameters - uses bitrate instead of CRF
+        return {
+            "vcodec": "h264_videotoolbox",
+            "video_bitrate": "8M",  # 8 Mbps for high quality
+            "acodec": "aac",
+            "pix_fmt": "yuv420p",
+            "movflags": "+faststart",
+        }
+    else:
+        # Software encoding with libx264
+        return {
+            "vcodec": "libx264",
+            "crf": 18,
+            "acodec": "aac",
+            "pix_fmt": "yuv420p",
+            "movflags": "+faststart",
+        }
+
+
+def _extract_single_segment(task: dict) -> tuple[int, str | None, str | None]:
+    """Extract a single segment using stream copy (fast) with re-encode fallback.
+
+    Returns:
+        Tuple of (index, segment_path or None, error message or None)
+    """
+    index = task["index"]
+    video_path = task["video_path"]
+    segment_path = task["segment_path"]
+    start_sec = task["start_sec"]
+    duration_sec = task["duration_sec"]
+
+    # Try stream copy first (10-100x faster than re-encoding)
+    try:
+        (
+            ffmpeg
+            .input(video_path, ss=start_sec, t=duration_sec)
+            .output(segment_path, vcodec="copy", acodec="copy", movflags="+faststart")
+            .overwrite_output()
+            .run(quiet=True)
+        )
+        return (index, segment_path, None)
+    except ffmpeg.Error:
+        # Stream copy failed, fall back to re-encoding with hardware acceleration
+        try:
+            enc_params = _get_encoding_params()
+            (
+                ffmpeg
+                .input(video_path, ss=start_sec, t=duration_sec)
+                .output(segment_path, **enc_params)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+            return (index, segment_path, None)
+        except ffmpeg.Error as e:
+            error_msg = e.stderr.decode()[:200] if hasattr(e, 'stderr') and e.stderr else str(e)
+            return (index, None, error_msg)
+
+
+def _extract_segments_parallel(tasks: list[dict]) -> list[str]:
+    """Extract multiple segments in parallel.
+
+    Args:
+        tasks: List of extraction task dicts
+
+    Returns:
+        List of successfully extracted segment paths (in order)
+    """
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_EXTRACTIONS) as executor:
+        futures = {executor.submit(_extract_single_segment, task): task for task in tasks}
+
+        completed = 0
+        total = len(tasks)
+        for future in as_completed(futures):
+            completed += 1
+            index, segment_path, error = future.result()
+            if segment_path:
+                results[index] = segment_path
+                seg_size = os.path.getsize(segment_path) / 1024
+                print(f"[Render] Segment {completed}/{total} extracted ({seg_size:.1f} KB)")
+            else:
+                print(f"[Render] ERROR extracting segment {index}: {error}")
+
+    # Return paths in order
+    return [results[i] for i in sorted(results.keys())]
 
 
 def render_final_video(
@@ -31,6 +174,7 @@ def render_final_video(
         generated_ads: Optional list of generated Veo ads with video_path and timestamp_ms
     """
     print(f"[Render] ========== STARTING FINAL VIDEO RENDER ==========")
+    print(f"[Render] Hardware acceleration: {'h264_videotoolbox' if _check_hwaccel_available() else 'disabled (using libx264)'}")
     print(f"[Render] Source videos: {len(video_paths)}")
     print(f"[Render] Output path: {output_path}")
     print(f"[Render] Music: {'Yes' if music_path else 'No'}")
@@ -52,8 +196,7 @@ def render_final_video(
         print(f"[Render] Working in temp directory: {tmpdir}")
 
         # Extract and prepare each segment
-        print(f"[Render] ---------- EXTRACTING SEGMENTS ----------")
-        segment_files = []
+        print(f"[Render] ---------- EXTRACTING SEGMENTS (PARALLEL) ----------")
 
         # Log which videos are being used
         video_usage = {}
@@ -62,11 +205,12 @@ def render_final_video(
             video_usage[vid] = video_usage.get(vid, 0) + 1
         print(f"[Render] Video usage in timeline: {video_usage}")
 
+        # Prepare extraction tasks
+        extraction_tasks = []
         for i, segment in enumerate(segments):
             video = video_map.get(segment["video_id"])
             if not video:
                 print(f"[Render] WARNING: Video not found for segment {i}: {segment['video_id']}")
-                print(f"[Render] Available videos: {list(video_map.keys())}")
                 continue
 
             # Calculate times with sync offset
@@ -76,38 +220,26 @@ def render_final_video(
 
             # Clamp start to valid range
             if start_sec < 0:
-                # Adjust duration to compensate for clamping
-                duration_sec = duration_sec + start_sec  # start_sec is negative, so this reduces duration
+                duration_sec = duration_sec + start_sec
                 start_sec = 0
 
-            # Skip segments that are too short (< 0.5 seconds)
+            # Skip segments that are too short
             if duration_sec < 0.5:
-                print(f"[Render] WARNING: Skipping segment {i} - duration too short ({duration_sec:.2f}s)")
                 continue
 
             segment_path = os.path.join(tmpdir, f"segment_{i:04d}.mp4")
+            extraction_tasks.append({
+                "index": i,
+                "video_path": video["path"],
+                "segment_path": segment_path,
+                "start_sec": start_sec,
+                "duration_sec": duration_sec,
+            })
 
-            print(f"[Render] Extracting segment {i + 1}/{len(segments)} from video '{segment['video_id']}': {start_sec:.2f}s for {duration_sec:.2f}s (sync_offset={sync_offset}ms)")
+        print(f"[Render] Extracting {len(extraction_tasks)} segments using {MAX_PARALLEL_EXTRACTIONS} parallel workers...")
 
-            # Extract segment with FFmpeg
-            try:
-                (
-                    ffmpeg
-                    .input(video["path"], ss=start_sec, t=duration_sec)
-                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18,
-                            pix_fmt="yuv420p", movflags="+faststart")
-                    .overwrite_output()
-                    .run(quiet=True)
-                )
-                segment_files.append(segment_path)
-                # Verify segment was created and has content
-                seg_size = os.path.getsize(segment_path)
-                print(f"[Render] Segment {i + 1} extracted successfully ({seg_size / 1024:.1f} KB)")
-            except ffmpeg.Error as e:
-                print(f"[Render] ERROR extracting segment {i}: {e}")
-                if hasattr(e, 'stderr') and e.stderr:
-                    print(f"[Render] FFmpeg stderr: {e.stderr.decode()[:500]}")
-                continue
+        # Extract segments in parallel using stream copy (much faster)
+        segment_files = _extract_segments_parallel(extraction_tasks)
 
         if not segment_files:
             print(f"[Render] ERROR: No segments extracted")
@@ -179,15 +311,16 @@ def concatenate_with_crossfades(
     output_path: str,
     crossfade_duration: float = 0.5,
 ) -> None:
-    """Concatenate video segments using concat demuxer (simple, reliable).
+    """Concatenate video segments using concat demuxer with stream copy (fast).
+
+    Uses stream copy instead of re-encoding for much faster concatenation.
+    All segments should already be encoded with compatible settings.
 
     Args:
         segment_files: List of paths to segment files
         output_path: Path to write concatenated output
         crossfade_duration: Duration of crossfade in seconds (currently unused - using simple concat)
     """
-    import tempfile
-
     if len(segment_files) == 1:
         # No concatenation needed
         (
@@ -199,25 +332,40 @@ def concatenate_with_crossfades(
         )
         return
 
-    # Use concat demuxer - simpler and more reliable than xfade filter
-    # Create a temporary file listing all segments
+    print(f"[Render] Using fast concat (stream copy) for {len(segment_files)} segments...")
+
+    # Use concat demuxer with stream copy - MUCH faster than re-encoding
+    # All segments are already encoded with consistent settings
     concat_list_path = output_path + ".txt"
     with open(concat_list_path, "w") as f:
         for segment in segment_files:
             f.write(f"file '{segment}'\n")
 
     try:
+        # Stream copy is ~100x faster than re-encoding
         (
             ffmpeg
             .input(concat_list_path, format="concat", safe=0)
-            .output(output_path, vcodec="libx264", acodec="aac", crf=18,
-                    pix_fmt="yuv420p", movflags="+faststart")
+            .output(output_path, vcodec="copy", acodec="copy", movflags="+faststart")
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
+        print(f"[Render] Fast concat complete")
     except ffmpeg.Error as e:
-        print(f"[Render] FFmpeg stderr: {e.stderr.decode() if e.stderr else 'no stderr'}")
-        raise
+        print(f"[Render] Fast concat failed, falling back to re-encode: {e.stderr.decode() if e.stderr else 'no stderr'}")
+        # Fall back to re-encoding if stream copy fails (e.g., incompatible segments)
+        try:
+            enc_params = _get_encoding_params()
+            (
+                ffmpeg
+                .input(concat_list_path, format="concat", safe=0)
+                .output(output_path, **enc_params)
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+        except ffmpeg.Error as e2:
+            print(f"[Render] Re-encode also failed: {e2.stderr.decode() if e2.stderr else 'no stderr'}")
+            raise
     finally:
         # Clean up temp file
         if os.path.exists(concat_list_path):
@@ -330,8 +478,7 @@ def apply_ken_burns_zoom(
                 y="ih/2-(ih/zoom/2)",
                 s="1920x1080",
                 fps=fps)
-        .output(output_path, vcodec="libx264", acodec="aac", crf=18,
-                pix_fmt="yuv420p", movflags="+faststart")
+        .output(output_path, **_get_encoding_params())
         .overwrite_output()
         .run(quiet=True)
     )
@@ -389,11 +536,10 @@ def add_sponsor_overlays(
             enable=f"between(t,{timestamp},{timestamp + 4})",
         )
 
+    enc_params = _get_encoding_params()
     (
         ffmpeg
-        .output(video, ffmpeg.input(input_path).audio, output_path,
-                vcodec="libx264", acodec="aac", crf=18,
-                pix_fmt="yuv420p", movflags="+faststart")
+        .output(video, ffmpeg.input(input_path).audio, output_path, **enc_params)
         .overwrite_output()
         .run(quiet=True)
     )
@@ -438,10 +584,10 @@ def mix_audio(
     # Mix
     mixed = ffmpeg.filter([music_audio, event_audio], "amix", inputs=2, duration="first")
 
+    enc_params = _get_encoding_params()
     (
         ffmpeg
-        .output(video.video, mixed, output_path, vcodec="libx264", acodec="aac", crf=18,
-                pix_fmt="yuv420p", movflags="+faststart")
+        .output(video.video, mixed, output_path, **enc_params)
         .overwrite_output()
         .run(quiet=True)
     )
@@ -485,11 +631,11 @@ def render_highlight_reel(
             duration = clip["end"] - clip["start"]
 
             print(f"[Render:Reel] Extracting clip {i + 1}/{len(clips)}: {start:.1f}s - {clip['end']:.1f}s ({duration:.1f}s)")
+            enc_params = _get_encoding_params()
             (
                 ffmpeg
                 .input(clip["path"], ss=start, t=duration)
-                .output(clip_path, vcodec="libx264", acodec="aac", crf=18,
-                        pix_fmt="yuv420p", movflags="+faststart")
+                .output(clip_path, **enc_params)
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -546,6 +692,9 @@ def generate_title_card(
     bg_color = vibe_colors.get(vibe, "#333333")
 
     # Use FFmpeg to generate title card
+    enc_params = _get_encoding_params()
+    # Remove acodec for title card (no audio source)
+    enc_params_no_audio = {k: v for k, v in enc_params.items() if k != "acodec"}
     (
         ffmpeg
         .input(f"color=c={bg_color}:s=1920x1080:d={duration}", f="lavfi")
@@ -555,7 +704,7 @@ def generate_title_card(
                 fontcolor="white",
                 x="(w-text_w)/2",
                 y="(h-text_h)/2")
-        .output(output_path, vcodec="libx264", pix_fmt="yuv420p", t=duration)
+        .output(output_path, t=duration, **enc_params_no_audio)
         .overwrite_output()
         .run(quiet=True)
     )
@@ -617,11 +766,11 @@ def insert_ads_into_video(
             segment_duration = insert_time - current_pos
 
             try:
+                enc_params = _get_encoding_params()
                 (
                     ffmpeg
                     .input(video_path, ss=current_pos, t=segment_duration)
-                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18,
-                            pix_fmt="yuv420p", movflags="+faststart")
+                    .output(segment_path, **enc_params)
                     .overwrite_output()
                     .run(quiet=True)
                 )
@@ -652,11 +801,11 @@ def insert_ads_into_video(
     if current_pos < video_duration:
         final_segment_path = os.path.join(tmpdir, "post_ads.mp4")
         try:
+            enc_params = _get_encoding_params()
             (
                 ffmpeg
                 .input(video_path, ss=current_pos)
-                .output(final_segment_path, vcodec="libx264", acodec="aac", crf=18,
-                        pix_fmt="yuv420p", movflags="+faststart")
+                .output(final_segment_path, **enc_params)
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -694,14 +843,15 @@ def normalize_ad_video(
         target_fps: Target frame rate
     """
     try:
+        enc_params = _get_encoding_params()
+        enc_params["ar"] = 44100  # Ensure consistent audio sample rate
         (
             ffmpeg
             .input(input_path)
             .filter("scale", w=target_width, h=target_height, force_original_aspect_ratio="decrease")
             .filter("pad", w=target_width, h=target_height, x="(ow-iw)/2", y="(oh-ih)/2")
             .filter("fps", fps=target_fps)
-            .output(output_path, vcodec="libx264", acodec="aac", crf=18, ar=44100,
-                    pix_fmt="yuv420p", movflags="+faststart")
+            .output(output_path, **enc_params)
             .overwrite_output()
             .run(quiet=True)
         )
@@ -744,6 +894,7 @@ def add_product_callout(
     x, y = positions.get(position, positions["bottom_right"])
 
     try:
+        enc_params = _get_encoding_params()
         (
             ffmpeg
             .input(video_path)
@@ -758,8 +909,7 @@ def add_product_callout(
                     box=1,
                     boxcolor="black@0.5",
                     boxborderw=10)
-            .output(output_path, vcodec="libx264", acodec="aac", crf=18,
-                    pix_fmt="yuv420p", movflags="+faststart")
+            .output(output_path, **enc_params)
             .overwrite_output()
             .run(quiet=True)
         )

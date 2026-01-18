@@ -3,9 +3,20 @@
 from functools import lru_cache
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 
 from config import get_settings
+
+
+# Optimized transfer config for parallel downloads/uploads
+# Uses multiple threads to speed up large file transfers
+TRANSFER_CONFIG = TransferConfig(
+    multipart_threshold=8 * 1024 * 1024,  # 8MB - use multipart for files > 8MB
+    max_concurrency=10,  # 10 parallel threads
+    multipart_chunksize=8 * 1024 * 1024,  # 8MB chunks
+    use_threads=True,
+)
 
 
 @lru_cache
@@ -86,17 +97,21 @@ def generate_presigned_download_url(
 def download_file(bucket: str, key: str, local_path: str) -> None:
     """Download a file from S3 to local filesystem.
 
+    Uses parallel multipart download for files > 8MB for faster transfers.
+
     Args:
         bucket: S3 bucket name
         key: Object key (path) in the bucket
         local_path: Local file path to save to
     """
     s3 = get_s3_client()
-    s3.download_file(bucket, key, local_path)
+    s3.download_file(bucket, key, local_path, Config=TRANSFER_CONFIG)
 
 
 def upload_file(local_path: str, bucket: str, key: str, content_type: str = None) -> str:
     """Upload a file from local filesystem to S3.
+
+    Uses parallel multipart upload for files > 8MB for faster transfers.
 
     Args:
         local_path: Local file path to upload
@@ -112,7 +127,11 @@ def upload_file(local_path: str, bucket: str, key: str, content_type: str = None
     if content_type:
         extra_args["ContentType"] = content_type
 
-    s3.upload_file(local_path, bucket, key, ExtraArgs=extra_args if extra_args else None)
+    s3.upload_file(
+        local_path, bucket, key,
+        ExtraArgs=extra_args if extra_args else None,
+        Config=TRANSFER_CONFIG
+    )
     return f"s3://{bucket}/{key}"
 
 
