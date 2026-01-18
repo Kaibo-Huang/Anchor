@@ -8,7 +8,7 @@ import PartnerIcon from '@mui/icons-material/AddBusiness';
 import AccountIcon from '@mui/icons-material/AccountCircle';
 import AddIcon from '@mui/icons-material/VideoCall';
 
-export default function TopNav() {
+export default function BotNav() {
   const pathname = usePathname() || '/'
   const router = useRouter()
   const [value, setValue] = React.useState(0);
@@ -84,7 +84,7 @@ export default function TopNav() {
                 handleNavigation(newValue);
               }}
               sx={{
-                height: "80px",
+                height: "70px",
                 backgroundColor: 'transparent',
                 '& .MuiBottomNavigationAction-root': {
                   color: 'rgba(255, 255, 255, 0.7)',

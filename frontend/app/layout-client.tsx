@@ -1,10 +1,11 @@
 'use client'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { createTheme, ThemeProvider } from '@mui/material/styles';
+import BotNav from "@/components/BotNav";
 
 const customTheme = createTheme({
   typography: {
@@ -38,7 +39,7 @@ const customTheme = createTheme({
     body1: {
       fontSize: 'clamp(1rem, 2vw, 1.5rem)',
       color: '#FAFAFA'
-    }
+    },
   },
   palette: {
     primary: {
@@ -67,6 +68,9 @@ const customTheme = createTheme({
     }
     // You can add other standard colors here (secondary, error, etc.)
   },
+  transitions:{
+
+  }
 });
 
 export default function LayoutClient({
@@ -85,23 +89,22 @@ export default function LayoutClient({
 
   const pathname = usePathname?.() ?? ''
   const isHomePage = pathname === '/'
+  const isEventsPage = pathname.startsWith('/events')
 
-  const bodyClass = isHomePage ? 'min-h-screen bg-white text-gray-900' : 'min-h-screen bg-[#FAFAFA] text-[#383A42]'
+  const bodyClass = (isHomePage || isEventsPage)
+    ? 'min-h-screen bg-white text-gray-900'
+    : 'min-h-screen bg-[#FAFAFA] text-[#383A42]'
 
   return (
-    <body className={`${bodyClass} overflow-x-hidden`}>
+    <body
+      className={`${bodyClass} overflow-x-hidden`}
+      style={{ backgroundColor: (isHomePage || isEventsPage) ? '#ffffff' : '#FAFAFA' }}
+    >
       <QueryClientProvider client={queryClient}>
         {!isHomePage && (
-          <nav className="bg-white border-b border-[#E5E5E5]">
-            <div className="max-w-5xl mx-auto px-6 lg:px-8">
-              <div className="flex justify-between h-20 items-center">
-                <Link href="/" className="flex items-center gap-3 group">
-                  <img src="/Anchor FInal.svg" alt="Anchor" className="h-8 w-auto" />
-                </Link>
-                <div className="text-sm font-medium text-[#A1A1A1]">AI-Powered Video Production</div>
-              </div>
+            <div className="absolute z-20" style={{left: '3vw', top: '5vh', width: '32vw'}}>
+              <img src="/Anchor%20FInal.svg" alt="Anchor logo" className="w-full h-auto object-contain"/>
             </div>
-          </nav>
         )}
         <ThemeProvider theme={customTheme}>
           {isHomePage ? (
@@ -111,6 +114,7 @@ export default function LayoutClient({
           ) : (
             <main className="px-6 lg:px-8 py-10">{children}</main>
           )}
+          <BotNav/>
         </ThemeProvider>
       </QueryClientProvider>
     </body>

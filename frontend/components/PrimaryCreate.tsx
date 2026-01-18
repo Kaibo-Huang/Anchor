@@ -4,6 +4,8 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import {styled} from "@mui/system";
 import {IconButton, TextField, Typography, CircularProgress} from "@mui/material";
 import SendIcon from '@mui/icons-material/Send';
+import AudioIcon from '@mui/icons-material/Audiotrack';
+import NoAudioIcon from '@mui/icons-material/MusicOff';
 import { useRouter } from 'next/navigation';
 import { createEvent, uploadVideoV2, uploadMusic, analyzeMusic } from '@/lib/api';
 
@@ -414,36 +416,60 @@ export default function PrimaryCreate() {
                             transition: 'opacity 0.6s ease-in-out'
                         }}
                     >
-                        {step > 0 && <TextField
-                            error
-                            id="outlined-multiline-static"
-                            label="Video Context"
-                            multiline
-                            rows={7}
-                            onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                                setVideoContext(event.target.value);
-                                if (step < 2) {
-                                    setStep(2);
-                                }
-                            }}
-                            sx={{
-                                minWidth: '22vw',
-                                '& .MuiOutlinedInput-root': {
-                                    '& textarea': {
-                                        color: 'white',
-                                        caretColor: 'white',
-                                    },
-                                },
-                                '& .MuiOutlinedInput-input': {
-                                    color: 'white',
-                                    caretColor: 'white',
-                                },
-                                '& .MuiOutlinedInput-input::placeholder': {
-                                    color: 'rgba(255, 255, 255, 0.7)',
-                                    opacity: 1,
-                                },
-                            }}
-                        />}
+                        {step > 0 && (
+                            <div style={{ position: 'relative', display: 'inline-block' }}>
+                                <TextField
+                                    error
+                                    id="outlined-multiline-static"
+                                    label="Video Context"
+                                    multiline
+                                    rows={7}
+                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+                                        setVideoContext(event.target.value);
+                                    }}
+                                    sx={{
+                                        minWidth: '22vw',
+                                        '& .MuiOutlinedInput-root': {
+                                            '& textarea': {
+                                                color: 'white',
+                                                caretColor: 'white',
+                                            },
+                                        },
+                                        '& .MuiOutlinedInput-input': {
+                                            color: 'white',
+                                            caretColor: 'white',
+                                        },
+                                        '& .MuiOutlinedInput-input::placeholder': {
+                                            color: 'rgba(255, 255, 255, 0.7)',
+                                            opacity: 1,
+                                        },
+                                    }}
+                                />
+                                <IconButton
+                                    onClick={() => {
+                                        if (videoContext.trim() && step < 3) {
+                                            setStep(2);
+                                        }
+                                    }}
+                                    sx={{
+                                        position: 'absolute',
+                                        bottom: 8,
+                                        right: 8,
+                                        width: "2.5vw",
+                                        height: "2.5vw",
+                                        backgroundColor: videoContext.trim() ? '#4078F2' : 'rgba(255, 255, 255, 0.15)',
+                                        '&:hover': {
+                                            backgroundColor: videoContext.trim() ? '#2d5bd9' : 'rgba(255, 255, 255, 0.25)',
+                                        },
+                                        '&.Mui-disabled': {
+                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                        },
+                                    }}
+                                >
+                                    <SendIcon sx={{ color: 'white', fontSize: 18 }} />
+                                </IconButton>
+                            </div>
+                        )}
                     </div>
 
                     {windowSize.width > 0 && (
@@ -496,7 +522,7 @@ export default function PrimaryCreate() {
                             role={undefined}
                             variant="contained"
                             tabIndex={-1}
-                            startIcon={<CloudUploadIcon color="secondary" style={{fontSize: "3vh"}}/>}
+                            startIcon={<AudioIcon color="secondary" style={{fontSize: "3vh"}}/>}
                             sx={{
                                 pl: "1.5vw",
                                 pr: "1.5vw",
@@ -531,7 +557,7 @@ export default function PrimaryCreate() {
                                     setStep(3);
                                 }}
                                 tabIndex={-1}
-                                startIcon={<CloudUploadIcon color="error" style={{fontSize: "3vh"}}/>}
+                                startIcon={<NoAudioIcon color="error" style={{fontSize: "3vh"}}/>}
                                 sx={{
                                     pl: "1.5vw",
                                     pr: "1.5vw",

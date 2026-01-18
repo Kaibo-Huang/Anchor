@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { listEvents } from '@/lib/api'
+import BotNav from "@/components/BotNav";
 
 export default function EventsPage() {
   const { data, isLoading, error } = useQuery({
@@ -51,11 +52,11 @@ export default function EventsPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8">
+    <div className="max-w-7xl mx-auto space-y-8 bg-white min-h-screen" style={{ backgroundColor: 'white' }}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold text-white tracking-tight">Your Events</h1>
+          <h1 className="text-4xl font-bold text-[#383A42] tracking-tight">Your Events</h1>
           <p className="text-[#A1A1A1] mt-2 text-lg">{events.length} event{events.length !== 1 ? 's' : ''}</p>
         </div>
         <Link

@@ -1,13 +1,12 @@
 "use client"
 
 import PrimaryCreate from '@/components/PrimaryCreate'
-import TopNav from "@/components/TopNav"
+import BotNav from "@/components/BotNav"
 
 export default function HomePage() {
   return (
     <div>
       <PrimaryCreate />
-      <TopNav/>
     </div>
   )
 }
