@@ -9,8 +9,9 @@ import {
   getShopifyAuthUrl,
   getShopifyProducts,
   disconnectShopify,
+  listShopifyStores,
 } from '@/lib/api'
-import type { BrandProduct, ShopifyProduct } from '@/lib/api'
+import type { BrandProduct, ShopifyProduct, ShopifyStore } from '@/lib/api'
 import BrandStoreBrowser from './BrandStoreBrowser'
 
 interface ShopifyConnectProps {
@@ -34,6 +35,12 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
     queryKey: ['shopify-products', eventId],
     queryFn: () => getShopifyProducts(eventId),
     enabled: !!connectedUrl,
+  })
+
+  // Get all connected stores
+  const { data: storesData, isLoading: storesLoading } = useQuery({
+    queryKey: ['shopify-stores'],
+    queryFn: () => listShopifyStores('active'),
   })
 
   const addBrandsMutation = useMutation({
@@ -70,6 +77,7 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
 
   const brandProducts = brandsData?.brand_products || []
   const legacyProducts = legacyProductsData?.products || []
+  const connectedStores = storesData?.stores || []
   const hasNewModelProducts = brandProducts.length > 0
   const hasLegacyConnection = !!connectedUrl
 
@@ -216,6 +224,41 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
   // No connection: Show options to connect
   return (
     <div className="space-y-6">
+      {/* Connected Stores List */}
+      {connectedStores.length > 0 && (
+        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <h3 className="font-medium text-gray-900 mb-3">Connected Stores ({connectedStores.length})</h3>
+          <div className="space-y-2">
+            {connectedStores.map((store: ShopifyStore) => (
+              <div key={store.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-100">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">🏪</span>
+                  <div>
+                    <p className="font-medium text-gray-900">{store.shop_name || store.shop_domain}</p>
+                    <p className="text-xs text-gray-500">{store.shop_domain}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">{store.product_count} products</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${
+                    store.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {store.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {storesLoading && (
+        <div className="flex items-center justify-center py-4">
+          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-400"></div>
+          <span className="ml-2 text-sm text-gray-500">Loading connected stores...</span>
+        </div>
+      )}
+
       {/* New model: Browse brand stores */}
       <div className="p-4 border-2 border-indigo-200 rounded-lg bg-indigo-50">
         <h3 className="font-medium text-indigo-900 mb-2">Browse Brand Partners</h3>

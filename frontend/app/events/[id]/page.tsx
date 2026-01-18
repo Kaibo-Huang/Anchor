@@ -274,13 +274,6 @@ export default function EventPage() {
         </div>
       )}
 
-      {/* Shopify Integration */}
-      <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
-        <h2 className="text-2xl font-bold text-[#383A42] mb-6">Shopify Integration</h2>
-        <p className="text-[#A1A1A1] mb-4">Connect your store for native product ads</p>
-        <ShopifyConnect eventId={eventId} connectedUrl={event.shopify_store_url} />
-      </div>
-
       {/* Personal Highlight Reels */}
       {(event.status === 'analyzed' || event.status === 'completed') && (
         <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
@@ -289,6 +282,13 @@ export default function EventPage() {
           <PersonalReelGenerator eventId={eventId} reels={reels} />
         </div>
       )}
+
+      {/* Shopify Integration */}
+      <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+        <h2 className="text-2xl font-bold text-[#383A42] mb-6">Shopify Integration</h2>
+        <p className="text-[#A1A1A1] mb-4">Connect your store for native product ads</p>
+        <ShopifyConnect eventId={eventId} connectedUrl={event.shopify_store_url} />
+      </div>
     </div>
   )
 }
