@@ -23,6 +23,14 @@ export const supabase = typeof window !== 'undefined'
   : (null as unknown as SupabaseClient)
 
 // Types for database tables
+export interface AnalysisProgress {
+  stage: 'initializing' | 'downloading' | 'compressing' | 'indexing' | 'embeddings' | 'saving' | 'complete'
+  stage_progress: number  // 0 to 1
+  current_video: number
+  total_videos: number
+  message: string
+}
+
 export interface Event {
   id: string
   user_id: string | null
@@ -35,6 +43,7 @@ export interface Event {
   music_url: string | null
   music_metadata: MusicMetadata | null
   twelvelabs_index_id: string | null
+  analysis_progress: AnalysisProgress | null
   created_at: string
   updated_at: string
 }

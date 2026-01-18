@@ -32,7 +32,7 @@ export default function ProductSelector({
 
   if (products.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
+      <div className="text-center py-8 text-gray-700">
         No products available in this store.
       </div>
     )
@@ -47,7 +47,7 @@ export default function ProductSelector({
         {selectedIds.size > 0 && (
           <button
             onClick={() => setSelectedIds(new Set())}
-            className="text-sm text-gray-500 hover:text-gray-700"
+            className="text-sm text-gray-600 hover:text-gray-800"
           >
             Clear all
           </button>
@@ -68,7 +68,7 @@ export default function ProductSelector({
                 isSelected
                   ? 'border-indigo-500 bg-indigo-50'
                   : isDisabled
-                  ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                  ? 'border-gray-200 bg-gray-100 opacity-60 cursor-not-allowed'
                   : 'border-gray-200 hover:border-indigo-300'
               }`}
             >
@@ -88,7 +88,7 @@ export default function ProductSelector({
                 />
               ) : (
                 <div className="w-full h-24 bg-gray-100 rounded mb-2 flex items-center justify-center">
-                  <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
                 </div>
@@ -97,7 +97,7 @@ export default function ProductSelector({
               <h4 className="text-sm font-medium text-gray-900 truncate">
                 {product.title}
               </h4>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-700">
                 ${typeof product.price === 'number' ? product.price.toFixed(2) : product.price}
               </p>
             </button>

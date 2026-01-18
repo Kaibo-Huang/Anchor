@@ -8,6 +8,7 @@ import MusicUpload from '@/components/MusicUpload'
 import ShopifyConnect from '@/components/ShopifyConnect'
 import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
+import AnalysisProgress from '@/components/AnalysisProgress'
 
 export default function EventPage() {
   const params = useParams()
@@ -49,6 +50,13 @@ export default function EventPage() {
 
   const generateMutation = useMutation({
     mutationFn: () => generateVideo(eventId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['event', eventId] })
+    },
+  })
+
+  const regenerateMutation = useMutation({
+    mutationFn: () => generateVideo(eventId, true), // force=true
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['event', eventId] })
     },
@@ -146,6 +154,8 @@ export default function EventPage() {
               <p className="text-sm text-gray-500">
                 {event.status === 'analyzing' ? 'Analyzing with TwelveLabs...' : 'Scene detection, objects, actions'}
               </p>
+              {/* Detailed Progress Bar */}
+              <AnalysisProgress progress={event.analysis_progress} status={event.status} />
             </div>
           </div>
 
@@ -188,6 +198,26 @@ export default function EventPage() {
               className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
             >
               {generateMutation.isPending ? 'Starting...' : 'Generate Final Video'}
+            </button>
+          )}
+
+          {event.status === 'completed' && (
+            <button
+              onClick={() => regenerateMutation.mutate()}
+              disabled={regenerateMutation.isPending}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            >
+              {regenerateMutation.isPending ? 'Re-rendering...' : 'Re-render Video'}
+            </button>
+          )}
+
+          {event.status === 'failed' && uploadedVideos.length > 0 && (
+            <button
+              onClick={() => analyzeMutation.mutate()}
+              disabled={analyzeMutation.isPending}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+            >
+              {analyzeMutation.isPending ? 'Retrying...' : 'Retry Analysis'}
             </button>
           )}
         </div>

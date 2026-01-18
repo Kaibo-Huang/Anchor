@@ -17,16 +17,28 @@ export default function MusicUpload({ eventId, currentMusicUrl }: MusicUploadPro
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
+      console.log(`[MusicUpload] Starting music upload: ${file.name}`)
+      console.log(`[MusicUpload] File size: ${(file.size / (1024 * 1024)).toFixed(1)} MB`)
+
+      console.log(`[MusicUpload] Stage: uploading`)
       setUploadState('uploading')
       await uploadMusic(eventId, file)
+      console.log(`[MusicUpload] Upload complete`)
+
+      console.log(`[MusicUpload] Stage: analyzing (beat detection)`)
       setUploadState('analyzing')
       await analyzeMusic(eventId)
+      console.log(`[MusicUpload] Analysis complete`)
+
       setUploadState('done')
+      console.log(`[MusicUpload] Music ready for use`)
     },
     onSuccess: () => {
+      console.log(`[MusicUpload] Invalidating event queries`)
       queryClient.invalidateQueries({ queryKey: ['event', eventId] })
     },
-    onError: () => {
+    onError: (error) => {
+      console.error(`[MusicUpload] Upload failed:`, error)
       setUploadState('idle')
     },
   })
@@ -115,7 +127,7 @@ export default function MusicUpload({ eventId, currentMusicUrl }: MusicUploadPro
               className="hidden"
             />
           </label>
-          <p className="text-xs text-gray-400 mt-2">MP3, WAV, M4A supported</p>
+          <p className="text-xs text-gray-600 mt-2">MP3, WAV, M4A supported</p>
         </div>
       ) : (
         <div className="border rounded-lg p-4">
@@ -124,7 +136,7 @@ export default function MusicUpload({ eventId, currentMusicUrl }: MusicUploadPro
               <span className="text-2xl">🎵</span>
               <div>
                 <p className="font-medium truncate max-w-[200px]">{selectedFile.name}</p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-600">
                   {(selectedFile.size / (1024 * 1024)).toFixed(1)} MB
                 </p>
               </div>
@@ -140,7 +152,7 @@ export default function MusicUpload({ eventId, currentMusicUrl }: MusicUploadPro
                   </button>
                   <button
                     onClick={() => setSelectedFile(null)}
-                    className="text-gray-400 hover:text-red-500"
+                    className="text-gray-600 hover:text-red-500"
                   >
                     ✕
                   </button>
