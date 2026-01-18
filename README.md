@@ -73,3 +73,19 @@ Building out such a cool idea
 
 * Better scalability so we can launch to the public
 * Speeding up editing + video processing
+## Did you implement a generative AI model or API in your hack this weekend?
+
+**1. TwelveLabs APIs (Marengo 3.0 + Pegasus 1.2)**
+
+- **Marengo 3.0**: Analyzes every frame for scene classification, object detection, action intensity (1-10 scale), and audio events (cheering, whistles, music)
+- **Pegasus 1.2**: Generates 1024-dimensional embeddings that capture the emotional "vibe" of each segment
+
+**Key Features Powered:**
+- **Multi-angle switching**: Scores each camera angle every 2 seconds based on action intensity and scene context to select the best view
+- **Natural language search**: Users query "show me my best moments" or "player 23 scoring" and TwelveLabs semantic search returns exact timestamps across all footage
+- **Vibe matching**: Embedding similarity ranks moments as High Energy/Emotional/Calm, letting users find clips that match their desired identity
+
+**2. Google Veo 3.1**
+
+- **What it does**: Generates 3.5-second product videos from Shopify products, matching the footage's visual style (color grading, lighting, camera movement)
+- **How it's used**: Creates native sponsor integrations at natural transition points (camera pans, scene fades) with seamless crossfades—looks like TV commercials, not popup ads
