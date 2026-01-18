@@ -276,7 +276,28 @@ def generate_product_video(
 
     # Save to temp file
     output_path = os.path.join(tempfile.gettempdir(), f"veo_{int(time.time())}.mp4")
-    video.video.save(output_path)
+
+    # Download video from remote URL
+    import httpx
+
+    # Get the video URL - Veo returns remote URLs
+    video_url = video.video.uri if hasattr(video.video, 'uri') else str(video.video)
+
+    # Download the video file (follow redirects, with API key auth)
+    settings = get_settings()
+    with httpx.Client(timeout=120.0, follow_redirects=True) as http_client:
+        # Add API key as query parameter for authentication
+        download_url = video_url
+        if "?" in download_url:
+            download_url += f"&key={settings.google_api_key}"
+        else:
+            download_url += f"?key={settings.google_api_key}"
+
+        response = http_client.get(download_url)
+        response.raise_for_status()
+
+        with open(output_path, 'wb') as f:
+            f.write(response.content)
 
     return output_path
 
@@ -350,7 +371,30 @@ def generate_native_ad(
 
     # Save to temp file
     output_path = os.path.join(tempfile.gettempdir(), f"veo_ad_{int(time.time())}.mp4")
-    video.video.save(output_path)
+
+    # Download video from remote URL
+    import httpx
+
+    # Get the video URL - Veo returns remote URLs
+    video_url = video.video.uri if hasattr(video.video, 'uri') else str(video.video)
+
+    print(f"[Veo] Downloading video from {video_url}")
+
+    # Download the video file (follow redirects, with API key auth)
+    settings = get_settings()
+    with httpx.Client(timeout=120.0, follow_redirects=True) as http_client:
+        # Add API key as query parameter for authentication
+        download_url = video_url
+        if "?" in download_url:
+            download_url += f"&key={settings.google_api_key}"
+        else:
+            download_url += f"?key={settings.google_api_key}"
+
+        response = http_client.get(download_url)
+        response.raise_for_status()
+
+        with open(output_path, 'wb') as f:
+            f.write(response.content)
 
     print(f"[Veo] Generated ad saved to {output_path}")
 
