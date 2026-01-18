@@ -58,3 +58,7 @@ The system processes footage through a six-stage pipeline:
 * Compressing audio and optimizing upload speed to AWS S3 Bucket
 * Making the editing/transitions not bad
 * Configuring Celery workers and Redis for async video processing—managing worker memory limits for large FFmpeg jobs and preventing race conditions in real-time status updates
+
+## Accomplishments that we're proud of
+
+Building out such a cool idea
