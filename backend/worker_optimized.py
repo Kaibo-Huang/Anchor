@@ -81,7 +81,7 @@ def update_generation_progress(supabase, event_id: str, stage: str, stage_progre
     print(f"[Worker:generate_video] Progress: {stage} - {message} ({stage_progress*100:.0f}%)")
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.analyze_videos_task")
 def analyze_videos_task(self, event_id: str):
     """Analyze all videos in an event using TwelveLabs.
 
@@ -363,7 +363,7 @@ def analyze_videos_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.generate_video_task")
 def generate_video_task(self, event_id: str):
     """Generate the final video for an event.
 
@@ -642,7 +642,7 @@ def generate_video_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=30)
+@celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.sync_store_products_task")
 def sync_store_products_task(self, store_id: str):
     """Sync products from Shopify store to local cache.
 
@@ -677,7 +677,7 @@ def sync_store_products_task(self, store_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=2)
+@celery.task(bind=True, max_retries=2, name="worker.analyze_music_task")
 def analyze_music_task(self, event_id: str):
     """Analyze uploaded music for beats and tempo."""
     from services.supabase_client import get_supabase
@@ -739,7 +739,7 @@ def analyze_music_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=2)
+@celery.task(bind=True, max_retries=2, name="worker.generate_highlight_reel_task")
 def generate_highlight_reel_task(self, event_id: str, reel_id: str, query: str, vibe: VibeType, duration: int = 30):
     """Generate a personalized highlight reel.
 
