@@ -88,4 +88,4 @@ Building out such a cool idea
 **2. Google Veo 3.1**
 
 - **What it does**: Generates 3.5-second product videos from Shopify products, matching the footage's visual style (color grading, lighting, camera movement)
-- **How it's used**: Creates native sponsor integrations at natural transition points (camera pans, scene fades) with seamless crossfades—looks like TV commercials, not popup ads
+- **How it's used**: Creates native sponsor integrations at natural transition points (camera pans, scene fades) with seamless crossfades. The ad looks like an integrated TV commercials, not a popup ad
