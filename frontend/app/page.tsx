@@ -1,10 +1,8 @@
-import Hero from '@/components/Hero'
 import Link from 'next/link'
 
 export default function Landing() {
   return (
     <div>
-      <Hero />
       <div className="max-w-7xl mx-auto px-6 py-12 text-center">
         <p className="text-lg text-gray-600 mb-6">Ready to create your first video?</p>
         <div className="flex items-center justify-center gap-4">
