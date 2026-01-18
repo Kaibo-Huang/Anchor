@@ -9,6 +9,8 @@ import ShopifyConnect from '@/components/ShopifyConnect'
 import PersonalReelGenerator from '@/components/PersonalReelGenerator'
 import VideoPlayer from '@/components/VideoPlayer'
 import AnalysisProgress from '@/components/AnalysisProgress'
+import GenerationProgress from '@/components/GenerationProgress'
+import { useEffect } from 'react'
 
 export default function EventPage() {
   const params = useParams()
@@ -61,6 +63,12 @@ export default function EventPage() {
       queryClient.invalidateQueries({ queryKey: ['event', eventId] })
     },
   })
+
+  useEffect(() => {
+    if (event) {
+      document.title = `${event.name} - Anchor`
+    }
+  }, [event])
 
   if (eventLoading) {
     return (
@@ -175,6 +183,8 @@ export default function EventPage() {
               <p className="text-sm text-gray-500">
                 {event.status === 'generating' ? 'Rendering final video...' : 'Multi-angle switching, zooms, music'}
               </p>
+              {/* Detailed Progress Bar for Generation */}
+              <GenerationProgress progress={event.generation_progress} status={event.status} />
             </div>
           </div>
         </div>

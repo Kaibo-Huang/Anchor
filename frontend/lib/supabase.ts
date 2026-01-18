@@ -31,6 +31,12 @@ export interface AnalysisProgress {
   message: string
 }
 
+export interface GenerationProgress {
+  stage: 'initializing' | 'downloading' | 'syncing' | 'timeline' | 'music' | 'ads' | 'rendering' | 'uploading' | 'complete'
+  stage_progress: number  // 0 to 1
+  message: string
+}
+
 export interface Event {
   id: string
   user_id: string | null
@@ -44,6 +50,7 @@ export interface Event {
   music_metadata: MusicMetadata | null
   twelvelabs_index_id: string | null
   analysis_progress: AnalysisProgress | null
+  generation_progress: GenerationProgress | null
   created_at: string
   updated_at: string
 }

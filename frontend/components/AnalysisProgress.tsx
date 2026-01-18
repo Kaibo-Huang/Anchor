@@ -7,16 +7,6 @@ interface AnalysisProgressProps {
   status: string
 }
 
-const STAGES = [
-  { key: 'initializing', label: 'Initialize', icon: '1' },
-  { key: 'downloading', label: 'Download', icon: '2' },
-  { key: 'compressing', label: 'Compress', icon: '2' },  // Same step as download
-  { key: 'indexing', label: 'Analyze', icon: '3' },
-  { key: 'embeddings', label: 'Embeddings', icon: '4' },
-  { key: 'saving', label: 'Save', icon: '5' },
-  { key: 'complete', label: 'Done', icon: '✓' },
-]
-
 // Map stages to step numbers for progress calculation
 const STAGE_TO_STEP: Record<string, number> = {
   'initializing': 0,
@@ -26,16 +16,6 @@ const STAGE_TO_STEP: Record<string, number> = {
   'embeddings': 3,
   'saving': 4,
   'complete': 5,
-}
-
-const STAGE_LABELS: Record<string, string> = {
-  'initializing': 'Initializing',
-  'downloading': 'Downloading Videos',
-  'compressing': 'Compressing Videos',
-  'indexing': 'AI Analysis',
-  'embeddings': 'Generating Embeddings',
-  'saving': 'Saving Results',
-  'complete': 'Complete',
 }
 
 export default function AnalysisProgress({ progress, status }: AnalysisProgressProps) {
@@ -60,21 +40,19 @@ export default function AnalysisProgress({ progress, status }: AnalysisProgressP
   }
 
   const currentStep = STAGE_TO_STEP[progress.stage] ?? 0
-  const totalSteps = 5
+  const totalSteps = 6  // 0=init, 1=download, 2=index, 3=embed, 4=save, 5=complete
 
   // Calculate overall progress: step progress + intra-step progress
   const stepWeight = 1 / totalSteps
   const overallProgress = (currentStep * stepWeight) + (progress.stage_progress * stepWeight)
-  const progressPercent = Math.min(100, Math.round(overallProgress * 100))
-
-  const stageLabel = STAGE_LABELS[progress.stage] || progress.stage
+  const progressPercent = Math.min(100, Math.max(0, Math.round(overallProgress * 100)))
 
   return (
     <div className="mt-4 space-y-3">
       {/* Stage indicator pills */}
       <div className="flex gap-1 justify-between">
-        {['Download', 'Analyze', 'Embed', 'Save'].map((label, idx) => {
-          const stepNum = idx + 1
+        {['Init', 'Download', 'Analyze', 'Embed', 'Save'].map((label, idx) => {
+          const stepNum = idx
           const isActive = currentStep === stepNum
           const isComplete = currentStep > stepNum || progress.stage === 'complete'
 
@@ -85,7 +63,7 @@ export default function AnalysisProgress({ progress, status }: AnalysisProgressP
                 isComplete
                   ? 'bg-green-100 text-green-700'
                   : isActive
-                  ? 'bg-yellow-100 text-yellow-700'
+                  ? 'bg-yellow-100 text-yellow-700 animate-pulse'
                   : 'bg-gray-100 text-gray-500'
               }`}
             >
@@ -109,20 +87,31 @@ export default function AnalysisProgress({ progress, status }: AnalysisProgressP
       </div>
 
       {/* Current status message */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-start gap-2">
         {progress.stage !== 'complete' && (
-          <div className="animate-spin h-4 w-4 border-2 border-yellow-500 border-t-transparent rounded-full"></div>
+          <div className="animate-spin h-4 w-4 border-2 border-yellow-500 border-t-transparent rounded-full flex-shrink-0 mt-0.5"></div>
         )}
         {progress.stage === 'complete' && (
-          <div className="h-4 w-4 bg-green-500 rounded-full flex items-center justify-center text-white text-xs">✓</div>
+          <div className="h-4 w-4 bg-green-500 rounded-full flex items-center justify-center text-white text-xs flex-shrink-0 mt-0.5">✓</div>
         )}
-        <span className="text-sm text-gray-600">{progress.message}</span>
+        <div className="flex-1">
+          <span className="text-sm text-gray-600">{progress.message}</span>
+          {progress.stage === 'indexing' && (
+            <p className="text-xs text-gray-400 mt-1">Processing scenes, objects, actions, and audio events...</p>
+          )}
+          {progress.stage === 'embeddings' && (
+            <p className="text-xs text-gray-400 mt-1">Creating semantic embeddings for intelligent search...</p>
+          )}
+        </div>
       </div>
 
-      {/* Video count */}
+      {/* Video count and stage progress */}
       {progress.total_videos > 0 && progress.stage !== 'complete' && (
-        <div className="text-xs text-gray-400">
-          Processing {progress.current_video} of {progress.total_videos} videos
+        <div className="flex items-center justify-between text-xs text-gray-400">
+          <span>Video {progress.current_video} of {progress.total_videos}</span>
+          {progress.stage_progress > 0 && progress.stage_progress < 1 && (
+            <span>{Math.round(progress.stage_progress * 100)}% of current step</span>
+          )}
         </div>
       )}
     </div>
