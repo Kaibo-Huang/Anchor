@@ -115,13 +115,29 @@ def analyze_videos_task(self, event_id: str):
         # Get event and videos
         print(f"[Worker:analyze_videos] Fetching event and videos from database...")
         _event = supabase.table("events").select("*").eq("id", event_id).single().execute()
-        videos = supabase.table("videos").select("*").eq("event_id", event_id).eq("status", "uploaded").execute()
 
-        print(f"[Worker:analyze_videos] Found {len(videos.data) if videos.data else 0} uploaded videos")
+        # Get both uploaded (need analysis) and already-analyzed videos
+        all_videos = supabase.table("videos").select("*").eq("event_id", event_id).in_("status", ["uploaded", "analyzed"]).execute()
 
-        if not videos.data:
-            print(f"[Worker:analyze_videos] ERROR: No uploaded videos found")
-            raise ValueError("No uploaded videos found")
+        # Separate videos that need analysis from those already done
+        videos_to_analyze = [v for v in all_videos.data if v["status"] == "uploaded"]
+        already_analyzed = [v for v in all_videos.data if v["status"] == "analyzed" and v.get("analysis_data")]
+
+        print(f"[Worker:analyze_videos] Found {len(videos_to_analyze)} videos needing analysis")
+        print(f"[Worker:analyze_videos] Found {len(already_analyzed)} already-analyzed videos (skipping)")
+
+        if not videos_to_analyze and not already_analyzed:
+            print(f"[Worker:analyze_videos] ERROR: No videos found")
+            raise ValueError("No videos found")
+
+        # If all videos are already analyzed, just return success
+        if not videos_to_analyze:
+            print(f"[Worker:analyze_videos] All videos already analyzed, skipping TwelveLabs processing")
+            supabase.table("events").update({"status": "analyzed"}).eq("id", event_id).execute()
+            return {"status": "success", "event_id": event_id, "videos_analyzed": 0, "cached": len(already_analyzed)}
+
+        # For backwards compatibility, use videos_to_analyze as the main list
+        videos = type('obj', (object,), {'data': videos_to_analyze})()
 
         total_videos = len(videos.data)
 
