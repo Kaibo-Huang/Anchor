@@ -296,7 +296,7 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
             value={legacyShopDomain}
             onChange={(e) => setLegacyShopDomain(e.target.value)}
             placeholder="your-store.myshopify.com"
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 placeholder:text-gray-500"
           />
           <button
             onClick={() => legacyConnectMutation.mutate()}

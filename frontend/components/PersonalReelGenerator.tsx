@@ -58,14 +58,14 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
     <div className="space-y-6">
       <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
         <h3 className="font-medium text-indigo-900 mb-2">Find Yourself in the Footage</h3>
-        <p className="text-sm text-indigo-700">
+        <p className="text-sm text-indigo-800">
           Use natural language to search for moments - &quot;me&quot;, &quot;player 23&quot;, &quot;person in red jersey&quot;
         </p>
       </div>
 
       {/* Search Input */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-900 mb-2">
           What do you want to see?
         </label>
         <input
@@ -73,13 +73,13 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder='Try: "me", "my best moments", "player 23"'
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 placeholder:text-gray-500 text-gray-900"
         />
       </div>
 
       {/* Quick Examples */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-900 mb-2">
           Quick Examples
         </label>
         <div className="flex flex-wrap gap-2">
@@ -87,7 +87,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
             <button
               key={example.query}
               onClick={() => setQuery(example.query)}
-              className="px-3 py-1 text-sm border border-gray-300 rounded-full hover:border-indigo-500 hover:text-indigo-600 transition-colors"
+              className="px-3 py-1 text-sm text-gray-700 border border-gray-300 rounded-full hover:border-indigo-500 hover:text-indigo-600 transition-colors"
             >
               {example.label}
             </button>
@@ -97,7 +97,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
 
       {/* Vibe Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-900 mb-2">
           Vibe / Identity
         </label>
         <div className="grid grid-cols-3 gap-3">
@@ -112,8 +112,8 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
               }`}
             >
               <div className="text-xl mb-1">{option.icon}</div>
-              <div className="font-medium text-sm">{option.label}</div>
-              <div className="text-xs text-gray-600 mt-1">{option.description}</div>
+              <div className="font-medium text-sm text-gray-900">{option.label}</div>
+              <div className="text-xs text-gray-700 mt-1">{option.description}</div>
             </button>
           ))}
         </div>
@@ -121,7 +121,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
 
       {/* Duration */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-900 mb-2">
           Duration: {duration} seconds
         </label>
         <input
@@ -133,7 +133,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
           onChange={(e) => setDuration(parseInt(e.target.value))}
           className="w-full"
         />
-        <div className="flex justify-between text-xs text-gray-600">
+        <div className="flex justify-between text-xs text-gray-700">
           <span>15s</span>
           <span>60s</span>
         </div>
