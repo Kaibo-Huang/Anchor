@@ -999,12 +999,24 @@ def generate_ad_slots(
     Returns:
         List of ad slots with timestamp_ms, score, duration_ms
     """
-    # Don't place ads in first/last 10 seconds
-    start_ms = 10000
-    end_ms = duration_ms - 10000
+    # Adaptive buffer: For short videos (< 60s), use smaller buffer to ensure at least 1 ad slot
+    # For longer videos, maintain 10s buffer for professional quality
+    if duration_ms < 60000:  # Less than 1 minute
+        buffer_ms = min(5000, duration_ms // 4)  # 5s buffer or 25% of duration, whichever is smaller
+    else:
+        buffer_ms = 10000  # Standard 10s buffer for longer videos
+
+    start_ms = buffer_ms
+    end_ms = duration_ms - buffer_ms
 
     if end_ms <= start_ms:
-        return []
+        # Video too short for ads - place one ad in the middle
+        print(f"[Timeline] Video too short ({duration_ms}ms) for buffered ad placement, placing ad at midpoint")
+        return [{
+            "timestamp_ms": duration_ms // 2,
+            "score": 50,  # Medium score
+            "duration_ms": 4000,
+        }]
 
     # Get blocked and boosted scene types from profile
     ad_block_scenes = profile.get("ad_block_scenes", [])
@@ -1153,12 +1165,23 @@ def generate_ad_slots(
                 break
 
     # ENSURE AT LEAST 1 AD: If no slots met threshold, force select best candidate
-    if not selected_slots and candidate_slots:
-        print("[Timeline] No ad slots met threshold, forcing best candidate to ensure at least 1 ad")
-        selected_slots.append(candidate_slots[0])  # Take highest-scoring slot
+    if not selected_slots:
+        if candidate_slots:
+            print("[Timeline] No ad slots met threshold, forcing best candidate to ensure at least 1 ad")
+            selected_slots.append(candidate_slots[0])  # Take highest-scoring slot
+        else:
+            # No candidates at all (shouldn't happen with new buffer logic, but handle gracefully)
+            print("[Timeline] No candidate slots found, placing fallback ad at midpoint")
+            selected_slots.append({
+                "timestamp_ms": duration_ms // 2,
+                "score": 50,
+                "duration_ms": 4000,
+            })
 
     # Sort by timestamp for output
     selected_slots.sort(key=lambda x: x["timestamp_ms"])
+
+    print(f"[Timeline] Generated {len(selected_slots)} ad slot(s) (min score: {min(s['score'] for s in selected_slots):.1f}, max score: {max(s['score'] for s in selected_slots):.1f})")
 
     return selected_slots
 
