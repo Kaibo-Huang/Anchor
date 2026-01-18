@@ -244,14 +244,15 @@ export default function PrimaryCreate() {
                                     variant="h1"
                                     sx={{
                                         fontWeight: 600,
-                                        marginBottom: '0.5rem'
+                                        marginBottom: '0.5rem',
+                                        color: 'white'
                                     }}
                                 >
                                     What kind of video do<br/> you want?
                                 </Typography>
                                 <Typography
                                     variant="body1"
-                                    sx={{color: '#CFD0D1'}}
+                                    sx={{color: 'rgba(255, 255, 255, 0.8)'}}
                                 >
                                     Describe your vision and we&apos;ll help bring it to life
                                 </Typography>
