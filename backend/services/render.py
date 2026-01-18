@@ -263,6 +263,11 @@ def render_final_video(
             print(f"[Render] ERROR: No segments extracted")
             raise ValueError("No segments extracted")
 
+        # Check if any segments failed - if so, we have gaps in the timeline
+        if len(segment_files) != len(extraction_tasks):
+            failed_count = len(extraction_tasks) - len(segment_files)
+            print(f"[Render] WARNING: {failed_count} segments failed to extract - output may have gaps!")
+
         print(f"[Render] Total segments extracted: {len(segment_files)}")
 
         # Build mapping from original segment index to extracted file index
@@ -352,17 +357,44 @@ def _normalize_segment(input_path: str, output_path: str) -> None:
     enc_params["ar"] = 48000  # Consistent audio sample rate
 
     try:
-        (
-            ffmpeg
-            .input(input_path)
+        # Check if input has audio stream
+        probe = ffmpeg.probe(input_path)
+        has_audio = any(s["codec_type"] == "audio" for s in probe.get("streams", []))
+
+        input_stream = ffmpeg.input(input_path)
+
+        # Apply video filters
+        video = (
+            input_stream.video
             .filter("scale", w=1920, h=1080, force_original_aspect_ratio="decrease")
             .filter("pad", w=1920, h=1080, x="(ow-iw)/2", y="(oh-ih)/2")
             .filter("fps", fps=30)
             .filter("format", pix_fmts="yuv420p")
-            .output(output_path, **enc_params)
-            .overwrite_output()
-            .run(quiet=True)
         )
+
+        if has_audio:
+            # Get audio stream (will be resampled by ar parameter)
+            audio = input_stream.audio
+            # Output with both streams
+            (
+                ffmpeg
+                .output(video, audio, output_path, **enc_params)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+        else:
+            # Video only - generate silent audio to ensure consistent format
+            # This prevents issues when concatenating with segments that have audio
+            silent_audio = ffmpeg.input("anullsrc=r=48000:cl=stereo", f="lavfi", t=_get_video_duration(input_path))
+            enc_params_no_ar = {k: v for k, v in enc_params.items() if k != "ar"}
+            (
+                ffmpeg
+                .output(video, silent_audio, output_path, **enc_params_no_ar, ar=48000)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+            print("[Render] Added silent audio to segment without audio track")
+
     except ffmpeg.Error as e:
         print(f"[Render] Normalization failed: {e.stderr.decode() if e.stderr else 'no stderr'}")
         # Fall back to just copying
@@ -458,11 +490,18 @@ def concatenate_with_crossfades(
 
         print("[Render] Crossfade concatenation complete")
 
-    except ffmpeg.Error as e:
-        error_msg = e.stderr.decode() if e.stderr else "no stderr"
-        print(f"[Render] Crossfade failed: {error_msg}")
-        print(f"[Render] Falling back to simple concatenation...")
-        _concatenate_simple(segment_files, output_path)
+    except Exception as e:
+        # Handle both ffmpeg.Error (has stderr) and other exceptions
+        error_msg = str(e)
+        if isinstance(e, ffmpeg.Error):
+            stderr = getattr(e, 'stderr', None)
+            if stderr:
+                error_msg = stderr.decode()
+        print(f"[Render] Crossfade failed: {error_msg[:300]}")
+        print("[Render] Falling back to simple concatenation...")
+        # Use normalized files if available, otherwise original
+        fallback_files = normalized_files if normalized_files else segment_files
+        _concatenate_simple(fallback_files, output_path)
 
 
 def _concatenate_multiple_with_xfade(
@@ -473,7 +512,8 @@ def _concatenate_multiple_with_xfade(
 ) -> None:
     """Concatenate multiple segments with xfade using raw ffmpeg command.
 
-    Uses filter_complex to chain multiple xfade filters.
+    Uses filter_complex to chain xfade filters for both video and audio
+    to keep them in sync.
     """
     n = len(files)
 
@@ -483,40 +523,47 @@ def _concatenate_multiple_with_xfade(
         inputs.extend(["-i", f])
 
     # Build filter_complex string
-    # We chain xfades: [0][1]xfade -> [v01], [v01][2]xfade -> [v012], etc.
-    # For audio: same pattern with acrossfade
+    # Chain xfades for video: [0:v][1:v]xfade -> [v0], [v0][2:v]xfade -> [v1], etc.
+    # Chain acrossfade for audio: [0:a][1:a]acrossfade -> [a0], [a0][2:a]acrossfade -> [a1], etc.
+    # This keeps video and audio durations in sync
 
     video_filters = []
     audio_filters = []
 
-    # Calculate offsets for each transition
-    # offset[i] = sum of durations[0:i+1] - (i+1) * crossfade_duration
-    cumulative_duration = 0
+    # For chained xfades, offset is when crossfade starts in the LEFT input's timeline
+    # First xfade: offset = duration[0] - crossfade
+    # After first xfade, output duration = duration[0] + duration[1] - crossfade
+    # Second xfade offset = (output duration) - crossfade
+    # etc.
+
+    current_output_duration = durations[0]
 
     for i in range(n - 1):
-        cumulative_duration += durations[i]
-        offset = cumulative_duration - (i + 1) * crossfade_duration
+        offset = current_output_duration - crossfade_duration
         if offset < 0:
             offset = 0
 
         if i == 0:
-            # First xfade: [0:v][1:v]
+            # First xfade/acrossfade: combine inputs 0 and 1
             video_filters.append(
                 f"[0:v][1:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset:.3f}[v{i}]"
             )
             audio_filters.append(
-                f"[0:a][1:a]acrossfade=d={crossfade_duration}[a{i}]"
+                f"[0:a][1:a]acrossfade=d={crossfade_duration}:c1=tri:c2=tri[a{i}]"
             )
         else:
-            # Chain from previous result
+            # Chain from previous result with next input
             video_filters.append(
                 f"[v{i-1}][{i+1}:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset:.3f}[v{i}]"
             )
             audio_filters.append(
-                f"[a{i-1}][{i+1}:a]acrossfade=d={crossfade_duration}[a{i}]"
+                f"[a{i-1}][{i+1}:a]acrossfade=d={crossfade_duration}:c1=tri:c2=tri[a{i}]"
             )
 
-    # Combine all filters
+        # Update output duration: previous output + next segment - crossfade overlap
+        current_output_duration = current_output_duration + durations[i + 1] - crossfade_duration
+
+    # Combine all filters (video first, then audio)
     filter_complex = ";".join(video_filters + audio_filters)
 
     # Final output labels
@@ -544,9 +591,11 @@ def _concatenate_multiple_with_xfade(
     cmd.append(output_path)
 
     print(f"[Render] Running xfade command with {n} inputs...")
+    print(f"[Render] Filter complex: {filter_complex[:300]}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
+        print(f"[Render] FFmpeg stderr: {result.stderr}")
         raise RuntimeError(f"FFmpeg xfade failed: {result.stderr[:500]}")
 
 
