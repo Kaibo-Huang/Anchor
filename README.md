@@ -62,3 +62,10 @@ The system processes footage through a six-stage pipeline:
 ## Accomplishments that we're proud of
 
 Building out such a cool idea
+
+## What we learned
+
+* TwelveLabs
+* Batching + parallelizing processes at a large scale
+* FFmpeg for video editing and putting videos together
+* Audio syncing using librosa audio fingerprinting
