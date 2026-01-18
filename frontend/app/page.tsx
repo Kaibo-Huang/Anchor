@@ -1,20 +1,13 @@
-import Link from 'next/link'
-import type { Metadata } from 'next'
+"use client"
 
-export const metadata: Metadata = {
-  title: 'Home',
-}
+import PrimaryCreate from '@/components/PrimaryCreate'
+import TopNav from "@/components/TopNav"
 
-export default function Landing() {
+export default function HomePage() {
   return (
     <div>
-      <div className="max-w-7xl mx-auto px-6 py-12 text-center">
-        <p className="text-lg text-gray-600 mb-6">Ready to create your first video?</p>
-        <div className="flex items-center justify-center gap-4">
-          <Link href="/create" className="inline-block bg-[#4078f2] text-white px-6 py-3 rounded-lg font-medium">Go to Create Page</Link>
-          <Link href="/" className="inline-block border border-gray-200 px-6 py-3 rounded-lg">Explore</Link>
-        </div>
-      </div>
+      <PrimaryCreate />
+      <TopNav/>
     </div>
   )
 }

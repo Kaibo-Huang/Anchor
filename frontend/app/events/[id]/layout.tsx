@@ -2,12 +2,13 @@ import type { Metadata } from 'next'
 import { getEvent } from '@/lib/api'
 
 type Props = {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
-    const event = await getEvent(params.id)
+    const { id } = await params
+    const event = await getEvent(id)
     return {
       title: event.name,
     }

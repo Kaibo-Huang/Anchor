@@ -84,14 +84,14 @@ export default function LayoutClient({
   }))
 
   const pathname = usePathname?.() ?? ''
-  const isCreate = pathname.startsWith('/create')
+  const isHomePage = pathname === '/'
 
-  const bodyClass = isCreate ? 'min-h-screen bg-white text-gray-900' : 'min-h-screen bg-gray-50 text-black'
+  const bodyClass = isHomePage ? 'min-h-screen bg-white text-gray-900' : 'min-h-screen bg-gray-50 text-black'
 
   return (
     <body className={`${bodyClass} overflow-x-hidden`}>
       <QueryClientProvider client={queryClient}>
-        {!isCreate && (
+        {!isHomePage && (
           <nav className="bg-white shadow-sm border-b">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex justify-between h-16 items-center">
@@ -104,7 +104,7 @@ export default function LayoutClient({
           </nav>
         )}
         <ThemeProvider theme={customTheme}>
-          {isCreate ? (
+          {isHomePage ? (
             <main className="w-full">
               {children}
             </main>
