@@ -10,7 +10,7 @@ But here's the problem: professional video editing is intimidating and expensive
 
 Meanwhile, professional sports broadcasts make multi-angle switching look seamless, but that requires expensive equipment and trained editors.
 
-We asked ourselves: What if AI could do this automatically? What if anyone with phone footage could create broadcast-quality recaps? And what if those videos could actually generate revenue through seamless sponsorships?
+We asked ourselves: What if AI could do this automatically? What if anyone with footage could create broadcast-quality recaps? And what if those videos could actually generate revenue through seamless sponsorships?
 
 That's why we built Anchor. We want to democratize professional video editing and help anyone amplify their identity through powerful visual storytelling.
 
