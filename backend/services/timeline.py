@@ -5,13 +5,19 @@ from typing import Literal
 import numpy as np
 from scipy.spatial.distance import cosine
 
-from config import VideoConfig, SWITCHING_PROFILES
+from config import (
+    VideoConfig,
+    SWITCHING_PROFILES,
+    MIN_SEGMENT_DURATION_BY_EVENT,
+    HYSTERESIS_THRESHOLD,
+    SPEAKER_SCORE_MULTIPLIERS,
+)
 from services.twelvelabs_service import search_videos, create_text_embedding
 
 
 def generate_timeline(
     videos: list[dict],
-    event_type: Literal["sports", "ceremony", "performance"],
+    event_type: Literal["sports", "ceremony", "performance", "speech", "lecture"],
     index_id: str | None = None,
     max_duration_ms: int | None = None,
 ) -> dict:
@@ -21,19 +27,25 @@ def generate_timeline(
     1. Score all moments across all videos
     2. Select the best moments within the duration budget
 
-    This produces variable-length segments (2-8 seconds) based on content
-    quality, and limits output to MAX_TOTAL_DURATION_MS (default 5 minutes).
+    Implements hysteresis to prevent jittery switching and uses event-specific
+    minimum segment durations (e.g., 10s for speeches vs 4s for sports).
 
     Args:
         videos: List of video dicts with id, path, angle_type, analysis_data, sync_offset_ms
-        event_type: Type of event for switching profile
+        event_type: Type of event for switching profile (sports, ceremony, performance, speech, lecture)
         index_id: TwelveLabs index ID for analysis queries
         max_duration_ms: Optional override for maximum output duration
 
     Returns:
         Timeline dict with segments, zooms, ad_slots, chapters
     """
-    profile = SWITCHING_PROFILES.get(event_type, SWITCHING_PROFILES["sports"])
+    # Get event-specific minimum segment duration
+    min_segment_ms = MIN_SEGMENT_DURATION_BY_EVENT.get(
+        event_type, VideoConfig.MIN_SEGMENT_DURATION_MS
+    )
+    print(f"[Timeline] Event type: {event_type}, min segment duration: {min_segment_ms/1000:.0f}s")
+
+    profile = SWITCHING_PROFILES.get(event_type, SWITCHING_PROFILES["ceremony"])
 
     if not videos:
         return {"segments": [], "zooms": [], "ad_slots": [], "chapters": []}
@@ -50,8 +62,8 @@ def generate_timeline(
     # Build scene context timeline for embedding-based scoring
     scene_contexts = build_scene_contexts(videos, index_id, event_type)
 
-    # Pass 1: Score all moments across all videos
-    all_moments = score_all_moments(videos, source_duration_ms, profile, index_id, scene_contexts)
+    # Pass 1: Score all moments across all videos (with speaker prioritization for speech events)
+    all_moments = score_all_moments(videos, source_duration_ms, profile, index_id, scene_contexts, event_type)
     total_windows = source_duration_ms // 2000
 
     print(f"[Timeline] Scored {len(all_moments)} moments ({total_windows} windows x {len(videos)} videos)")
@@ -65,8 +77,8 @@ def generate_timeline(
 
     print(f"[Timeline] Selected {len(selected_moments)}/{total_windows} moments (quality threshold: {VideoConfig.MIN_SEGMENT_QUALITY_SCORE})")
 
-    # Build variable-length segments from selected moments
-    segments = build_variable_segments(selected_moments)
+    # Build variable-length segments from selected moments with hysteresis
+    segments = build_variable_segments(selected_moments, event_type, min_segment_ms)
 
     # Ensure angle diversity - all videos should be represented
     segments = _ensure_angle_diversity(segments, videos)
@@ -181,11 +193,16 @@ def score_angle_at_time(
     scene_context: dict | None = None,
     video_index: int = 0,
     total_videos: int = 1,
+    event_type: str = "sports",
 ) -> float:
     """Score an angle's suitability at a given time using embeddings.
 
     Uses embedding similarity to match angles to scene context, combined with
     profile rules for intelligent angle switching.
+
+    For speech/ceremony events, applies speaker prioritization:
+    - Closeup angles get 2x score multiplier when speaker is detected
+    - Wide/audience shots are deprioritized during speech
 
     Args:
         video: Video dict with angle_type and analysis_data
@@ -195,12 +212,16 @@ def score_angle_at_time(
         scene_context: Optional context with current scene embeddings
         video_index: Index of this video in the list (for tie-breaking)
         total_videos: Total number of videos (for switching logic)
+        event_type: Type of event (for speaker prioritization)
 
     Returns:
         Score from 0-100
     """
     angle_type = video.get("angle_type", "other")
     analysis = video.get("analysis_data", {})
+
+    # Check if this is a speech-focused event type
+    is_speech_event = event_type in ("ceremony", "speech", "lecture")
 
     # Base score by angle type (25% of total score)
     base_scores = {
@@ -272,21 +293,38 @@ def score_angle_at_time(
         # We have embeddings but no context - give base credit
         embedding_score = 15
 
+    # Speaker prioritization for speech/ceremony events
+    # Closeup on speaker should dominate 90% of the time
+    speaker_multiplier = 1.0
+    if is_speech_event and scene_context:
+        scene_type = scene_context.get("scene_type")
+        is_speaking_scene = scene_type in ("speech", "name_called", "solo", "announcement")
+
+        if is_speaking_scene or scene_context.get("action_intensity", 5) <= 4:
+            # During speech or low-action moments: strongly prefer closeup/speaker angles
+            multiplier = SPEAKER_SCORE_MULTIPLIERS.get(angle_type, 1.0)
+            speaker_multiplier = multiplier
+
+            # Penalize wide/crowd shots during speech (only use for applause/transitions)
+            if angle_type in ("wide", "crowd", "audience"):
+                speaker_multiplier = 0.3  # Heavy penalty - only switch for applause
+
     # Apply softer time-based diversity bonus (not rigid rotation)
     # This encourages variety without forcing predictable 4-second switches
-    if total_videos > 1:
+    # DISABLED for speech events - speaker angle should dominate
+    if total_videos > 1 and not is_speech_event:
         # Use a longer interval for diversity consideration
         switch_interval_ms = 6000  # 6 second intervals (more flexible than 4s)
         time_slot = (time_ms // switch_interval_ms) % total_videos
 
         if time_slot == video_index:
             # Moderate diversity bonus - can be overridden by quality
-            embedding_score += VideoConfig.ROTATION_BONUS_BASE  # +20 instead of +50
+            embedding_score += VideoConfig.ROTATION_BONUS_BASE  # +20
         else:
             # Light penalty - quality can still win
-            embedding_score -= VideoConfig.ROTATION_PENALTY  # -10 instead of -15
+            embedding_score -= VideoConfig.ROTATION_PENALTY  # -10
 
-    total_score = base_score + profile_score + embedding_score
+    total_score = (base_score + profile_score + embedding_score) * speaker_multiplier
     return min(total_score, 100)
 
 
@@ -450,6 +488,7 @@ def score_all_moments(
     profile: dict,
     index_id: str | None,
     scene_contexts: list[dict],
+    event_type: str = "sports",
 ) -> list[dict]:
     """Score every 2-second window across all videos.
 
@@ -462,6 +501,7 @@ def score_all_moments(
         profile: Switching profile for event type
         index_id: TwelveLabs index ID
         scene_contexts: Pre-built scene contexts
+        event_type: Type of event (for speaker prioritization)
 
     Returns:
         List of moment dicts with time_ms, video_id, score, engagement
@@ -473,7 +513,7 @@ def score_all_moments(
         engagement = calculate_engagement_score(scene_context)
 
         for video_idx, video in enumerate(videos):
-            # Score without the old rotation boost
+            # Score with speaker prioritization for speech events
             score = score_angle_at_time(
                 video=video,
                 time_ms=t_ms,
@@ -482,6 +522,7 @@ def score_all_moments(
                 scene_context=scene_context,
                 video_index=video_idx,
                 total_videos=len(videos),
+                event_type=event_type,
             )
 
             all_moments.append({
@@ -551,20 +592,36 @@ def select_best_moments(
     return selected
 
 
-def build_variable_segments(selected_moments: list[dict]) -> list[dict]:
+def build_variable_segments(
+    selected_moments: list[dict],
+    event_type: str = "sports",
+    min_segment_ms: int | None = None,
+) -> list[dict]:
     """Build segments with variable durations based on content quality.
 
-    High-quality content can extend segments up to MAX_SEGMENT_DURATION_MS.
-    Low-quality content keeps segments at MIN_SEGMENT_DURATION_MS.
+    Implements hysteresis to prevent jittery switching: only switches angles
+    when a new angle is significantly better (30%+ improvement).
+
+    Uses event-specific minimum segment durations:
+    - sports: 4s (fast-paced)
+    - ceremony/speech: 10s (stable, professional)
+    - lecture: 12s (calm, educational)
 
     Args:
         selected_moments: Selected moments from Pass 2, sorted by time
+        event_type: Type of event for duration rules
+        min_segment_ms: Override minimum segment duration
 
     Returns:
         List of segment dicts with start_ms, end_ms, video_id
     """
     if not selected_moments:
         return []
+
+    # Use event-specific minimum or provided override
+    effective_min_ms = min_segment_ms or MIN_SEGMENT_DURATION_BY_EVENT.get(
+        event_type, VideoConfig.MIN_SEGMENT_DURATION_MS
+    )
 
     segments = []
     current_segment = None
@@ -580,14 +637,34 @@ def build_variable_segments(selected_moments: list[dict]) -> list[dict]:
                 "total_engagement": moment["engagement"],
                 "moment_count": 1,
             }
-        elif _can_extend_segment(current_segment, moment):
+        elif _can_extend_segment_with_hysteresis(current_segment, moment, effective_min_ms):
             # Extend current segment
             current_segment["end_ms"] = moment["time_ms"] + 2000
             current_segment["total_score"] += moment["score"]
             current_segment["total_engagement"] += moment["engagement"]
             current_segment["moment_count"] += 1
         else:
-            # Finalize current segment and start new one
+            # Hysteresis check: only switch if new angle is significantly better
+            current_duration = current_segment["end_ms"] - current_segment["start_ms"]
+            current_avg_score = current_segment["total_score"] / current_segment["moment_count"]
+
+            # If below minimum duration, MUST extend (don't switch)
+            if current_duration < effective_min_ms:
+                # Force extend with current video even if different angle scored higher
+                current_segment["end_ms"] = moment["time_ms"] + 2000
+                current_segment["moment_count"] += 1
+                continue
+
+            # Apply hysteresis: new angle must be 30%+ better to justify switch
+            if moment["score"] <= current_avg_score * (1 + HYSTERESIS_THRESHOLD):
+                # New angle isn't significantly better - extend current segment
+                current_segment["end_ms"] = moment["time_ms"] + 2000
+                current_segment["total_score"] += moment["score"]
+                current_segment["total_engagement"] += moment["engagement"]
+                current_segment["moment_count"] += 1
+                continue
+
+            # New angle is significantly better - finalize current and start new
             segments.append({
                 "start_ms": current_segment["start_ms"],
                 "end_ms": current_segment["end_ms"],
@@ -613,8 +690,49 @@ def build_variable_segments(selected_moments: list[dict]) -> list[dict]:
     return segments
 
 
+def _can_extend_segment_with_hysteresis(
+    segment: dict,
+    moment: dict,
+    min_segment_ms: int,
+) -> bool:
+    """Check if a segment should be extended, with hysteresis for stability.
+
+    Extension is allowed if:
+    - Same video ID AND contiguous in time
+    - OR below minimum duration (forced extension to prevent jittery cuts)
+    - AND below max duration
+
+    Args:
+        segment: Current segment being built
+        moment: Candidate moment to extend with
+        min_segment_ms: Event-specific minimum segment duration
+
+    Returns:
+        True if segment should be extended
+    """
+    current_duration = segment["end_ms"] - segment["start_ms"]
+
+    # Stop if at maximum duration
+    if current_duration >= VideoConfig.MAX_SEGMENT_DURATION_MS:
+        return False
+
+    # Must be contiguous (no gap in time)
+    if moment["time_ms"] != segment["end_ms"]:
+        return False
+
+    # Same video - always extend (up to max)
+    if moment["video_id"] == segment["video_id"]:
+        return True
+
+    # Different video but below minimum - force extend to prevent jitter
+    if current_duration < min_segment_ms:
+        return True
+
+    return False
+
+
 def _can_extend_segment(segment: dict, moment: dict) -> bool:
-    """Check if a segment should be extended with the given moment.
+    """Legacy function - use _can_extend_segment_with_hysteresis instead.
 
     Extension is allowed if:
     - Same video ID

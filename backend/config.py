@@ -73,8 +73,8 @@ class VideoConfig:
 
     # Timeline Duration Limits
     MAX_TOTAL_DURATION_MS = 300000      # 5 minutes max output
-    MIN_SEGMENT_DURATION_MS = 2000      # Minimum 2 seconds
-    MAX_SEGMENT_DURATION_MS = 8000      # Maximum 8 seconds
+    MIN_SEGMENT_DURATION_MS = 8000      # Minimum 8 seconds (default fallback)
+    MAX_SEGMENT_DURATION_MS = 20000     # Maximum 20 seconds
 
     # Quality Thresholds
     MIN_SEGMENT_QUALITY_SCORE = 30      # Minimum score to include segment
@@ -122,4 +122,27 @@ MUSIC_MIX_PROFILES = {
     "sports": {"music_volume": 0.5, "event_volume": 0.8, "duck_speech": True},
     "ceremony": {"music_volume": 0.3, "event_volume": 1.0, "duck_speech": True},
     "performance": {"music_volume": 0.2, "event_volume": 1.0, "duck_speech": False},
+}
+
+# Minimum segment duration by event type (in milliseconds)
+# CRITICAL: Longer durations prevent "MTV effect" motion sickness
+# Professional broadcast holds shots 7-15 seconds for low-intensity content
+MIN_SEGMENT_DURATION_BY_EVENT = {
+    "sports": 4000,       # 4s - fast-paced but not frantic
+    "ceremony": 10000,    # 10s - speeches/walks need stability
+    "performance": 6000,  # 6s - music-driven, moderate pacing
+    "speech": 10000,      # 10s - lectures/talks require calm pacing
+    "lecture": 12000,     # 12s - educational content needs longest holds
+}
+
+# Hysteresis threshold to prevent jittery switching
+# Only switch angles if new angle scores > current * (1 + threshold)
+HYSTERESIS_THRESHOLD = 0.30  # 30% better required to switch
+
+# Speaker prioritization multipliers (for speech/ceremony events)
+SPEAKER_SCORE_MULTIPLIERS = {
+    "closeup": 2.0,       # 2x boost when speaker detected on closeup
+    "medium": 1.5,        # 1.5x boost for medium shots with speaker
+    "podium": 2.0,        # 2x boost for podium angle during speech
+    "stage_closeup": 2.0, # 2x boost for stage closeup
 }
