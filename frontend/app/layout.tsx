@@ -27,6 +27,11 @@ const customTheme = createTheme({
       fontWeight: 600,
       color: '#4078F2',
     },
+    h6: {
+      fontSize: 'clamp(1.25rem, 2.6vw, 2rem)',
+      fontWeight: 600,
+      color: '#FAFAFA',
+    },
     button: {
       textTransform: 'none'
     },
@@ -49,7 +54,10 @@ const customTheme = createTheme({
       main: '#FAFAFA', // Red
     },
     warning: {
-        main: '#A1A1A1', // grey
+        main: '#CA1243', // grey
+    },
+    grey: {
+      100: '#FAFAFA',
     },
     info: {
         main: '#FAFAFA', // A custom background color

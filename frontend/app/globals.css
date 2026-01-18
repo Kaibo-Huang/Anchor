@@ -73,3 +73,61 @@ body {
     opacity: 1;
   }
 }
+
+.fade-in-text {
+  animation: text-fade-in 0.8s ease-in-out forwards;
+}
+
+@keyframes text-fade-out {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes text-no-fade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0.01;
+  }
+}
+
+.fade-out-text {
+  animation: text-fade-out 0.4s ease-in-out forwards;
+}
+
+.fade-in-text-delayed {
+  animation: text-fade-in 0.4s ease-in-out forwards;
+}
+
+.fade-no-fade-text {
+  animation: text-no-fade 0.4s ease-in-out forwards;
+}
+
+@keyframes slide-right-out {
+  from {
+    transform: scale(100%);
+  }
+  to {
+    transform: scale(25%);
+  }
+}
+
+@keyframes spotlight {
+  0% {
+    r: 0;
+    fill-opacity: 100%;
+  }
+  to {
+    r: 150%;
+    fill-opacity: 100%;
+  }
+}
+
+.circle-expand {
+  animation: spotlight 0.9s ease-in-out forwards;
+}
