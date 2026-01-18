@@ -123,14 +123,14 @@ def _extract_single_segment(task: dict) -> tuple[int, str | None, str | None]:
             return (index, None, error_msg)
 
 
-def _extract_segments_parallel(tasks: list[dict]) -> list[str]:
+def _extract_segments_parallel(tasks: list[dict]) -> tuple[list[str], list[int]]:
     """Extract multiple segments in parallel.
 
     Args:
         tasks: List of extraction task dicts
 
     Returns:
-        List of successfully extracted segment paths (in order)
+        Tuple of (list of segment paths in order, list of task indices that succeeded)
     """
     results = {}
 
@@ -149,8 +149,9 @@ def _extract_segments_parallel(tasks: list[dict]) -> list[str]:
             else:
                 print(f"[Render] ERROR extracting segment {index}: {error}")
 
-    # Return paths in order
-    return [results[i] for i in sorted(results.keys())]
+    # Return paths and indices in order
+    sorted_indices = sorted(results.keys())
+    return [results[i] for i in sorted_indices], sorted_indices
 
 
 def render_final_video(
@@ -207,6 +208,9 @@ def render_final_video(
 
         # Prepare extraction tasks
         extraction_tasks = []
+        segment_index_map = {}  # Maps extraction task index to original segment index
+        task_idx = 0
+
         for i, segment in enumerate(segments):
             video = video_map.get(segment["video_id"])
             if not video:
@@ -214,32 +218,46 @@ def render_final_video(
                 continue
 
             # Calculate times with sync offset
+            # sync_offset is when this video's audio matches the reference video
+            # So we need to subtract it to find the correct position in this video
             sync_offset = video.get("sync_offset_ms", 0)
-            start_sec = (segment["start_ms"] - sync_offset) / 1000
-            duration_sec = (segment["end_ms"] - segment["start_ms"]) / 1000
+            segment_start_ms = segment["start_ms"]
+            segment_end_ms = segment["end_ms"]
 
-            # Clamp start to valid range
+            # Calculate actual position in source video
+            start_sec = (segment_start_ms - sync_offset) / 1000
+            end_sec = (segment_end_ms - sync_offset) / 1000
+
+            # Handle edge cases where sync offset pushes us before video start
             if start_sec < 0:
-                duration_sec = duration_sec + start_sec
                 start_sec = 0
+            if end_sec <= 0:
+                print(f"[Render] WARNING: Segment {i} ends before video start (sync_offset={sync_offset}ms), skipping")
+                continue
+
+            duration_sec = end_sec - start_sec
 
             # Skip segments that are too short
             if duration_sec < 0.5:
+                print(f"[Render] WARNING: Segment {i} too short ({duration_sec:.2f}s), skipping")
                 continue
 
             segment_path = os.path.join(tmpdir, f"segment_{i:04d}.mp4")
             extraction_tasks.append({
-                "index": i,
+                "index": task_idx,
+                "original_segment_index": i,  # Track original segment index for zooms
                 "video_path": video["path"],
                 "segment_path": segment_path,
                 "start_sec": start_sec,
                 "duration_sec": duration_sec,
             })
+            segment_index_map[task_idx] = i
+            task_idx += 1
 
         print(f"[Render] Extracting {len(extraction_tasks)} segments using {MAX_PARALLEL_EXTRACTIONS} parallel workers...")
 
         # Extract segments in parallel using stream copy (much faster)
-        segment_files = _extract_segments_parallel(extraction_tasks)
+        segment_files, extracted_indices = _extract_segments_parallel(extraction_tasks)
 
         if not segment_files:
             print(f"[Render] ERROR: No segments extracted")
@@ -247,12 +265,21 @@ def render_final_video(
 
         print(f"[Render] Total segments extracted: {len(segment_files)}")
 
+        # Build mapping from original segment index to extracted file index
+        original_to_extracted = {}
+        for extracted_idx, task_idx in enumerate(extracted_indices):
+            original_seg_idx = segment_index_map.get(task_idx)
+            if original_seg_idx is not None:
+                original_to_extracted[original_seg_idx] = extracted_idx
+
         # Apply zooms to segments
         zooms = timeline.get("zooms", [])
         if zooms:
             print(f"[Render] ---------- APPLYING ZOOMS ----------")
             print(f"[Render] Applying {len(zooms)} zoom effects...")
-            segment_files = apply_zooms_to_segments(segment_files, segments, zooms, tmpdir)
+            segment_files = apply_zooms_to_segments(
+                segment_files, segments, zooms, tmpdir, original_to_extracted
+            )
         else:
             print(f"[Render] No zoom effects to apply")
 
@@ -306,23 +333,60 @@ def render_final_video(
         print(f"[Render] ========== RENDER COMPLETE ==========")
 
 
+def _get_video_duration(path: str) -> float:
+    """Get video duration in seconds using ffprobe."""
+    probe = ffmpeg.probe(path)
+    return float(probe["format"]["duration"])
+
+
+def _normalize_segment(input_path: str, output_path: str) -> None:
+    """Normalize a segment to consistent format for concatenation with crossfades.
+
+    Ensures all segments have:
+    - Same resolution (1920x1080)
+    - Same frame rate (30fps)
+    - Same audio sample rate (48000Hz)
+    - Same pixel format (yuv420p)
+    """
+    enc_params = _get_encoding_params()
+    enc_params["ar"] = 48000  # Consistent audio sample rate
+
+    try:
+        (
+            ffmpeg
+            .input(input_path)
+            .filter("scale", w=1920, h=1080, force_original_aspect_ratio="decrease")
+            .filter("pad", w=1920, h=1080, x="(ow-iw)/2", y="(oh-ih)/2")
+            .filter("fps", fps=30)
+            .filter("format", pix_fmts="yuv420p")
+            .output(output_path, **enc_params)
+            .overwrite_output()
+            .run(quiet=True)
+        )
+    except ffmpeg.Error as e:
+        print(f"[Render] Normalization failed: {e.stderr.decode() if e.stderr else 'no stderr'}")
+        # Fall back to just copying
+        import shutil
+        shutil.copy(input_path, output_path)
+
+
 def concatenate_with_crossfades(
     segment_files: list[str],
     output_path: str,
     crossfade_duration: float = 0.5,
 ) -> None:
-    """Concatenate video segments using concat demuxer with stream copy (fast).
+    """Concatenate video segments with actual crossfade transitions using xfade filter.
 
-    Uses stream copy instead of re-encoding for much faster concatenation.
-    All segments should already be encoded with compatible settings.
+    This properly blends segments together for smooth visual transitions.
+    Requires re-encoding but produces professional-quality output.
 
     Args:
         segment_files: List of paths to segment files
         output_path: Path to write concatenated output
-        crossfade_duration: Duration of crossfade in seconds (currently unused - using simple concat)
+        crossfade_duration: Duration of crossfade in seconds
     """
     if len(segment_files) == 1:
-        # No concatenation needed
+        # No concatenation needed - just copy
         (
             ffmpeg
             .input(segment_files[0])
@@ -332,42 +396,177 @@ def concatenate_with_crossfades(
         )
         return
 
-    print(f"[Render] Using fast concat (stream copy) for {len(segment_files)} segments...")
+    print(f"[Render] Concatenating {len(segment_files)} segments with crossfade transitions...")
 
-    # Use concat demuxer with stream copy - MUCH faster than re-encoding
-    # All segments are already encoded with consistent settings
+    # First, normalize all segments to ensure compatible formats
+    tmpdir = os.path.dirname(segment_files[0])
+    normalized_files = []
+
+    print("[Render] Normalizing segments for crossfade compatibility...")
+    for i, seg_path in enumerate(segment_files):
+        normalized_path = os.path.join(tmpdir, f"normalized_{i:04d}.mp4")
+        _normalize_segment(seg_path, normalized_path)
+        normalized_files.append(normalized_path)
+        print(f"[Render] Normalized segment {i + 1}/{len(segment_files)}")
+
+    # Get durations of all normalized segments
+    durations = []
+    for f in normalized_files:
+        durations.append(_get_video_duration(f))
+
+    print(f"[Render] Segment durations: {[f'{d:.2f}s' for d in durations]}")
+
+    # Build xfade filter chain using ffmpeg-python
+    # For N segments, we need N-1 xfade transitions
+    try:
+        if len(normalized_files) == 2:
+            # Simple case: two segments with one crossfade
+            offset = durations[0] - crossfade_duration
+            if offset < 0:
+                offset = 0
+
+            stream1 = ffmpeg.input(normalized_files[0])
+            stream2 = ffmpeg.input(normalized_files[1])
+
+            # Video crossfade
+            video = ffmpeg.filter(
+                [stream1.video, stream2.video],
+                "xfade",
+                transition="fade",
+                duration=crossfade_duration,
+                offset=offset
+            )
+
+            # Audio crossfade
+            audio = ffmpeg.filter(
+                [stream1.audio, stream2.audio],
+                "acrossfade",
+                d=crossfade_duration
+            )
+
+            enc_params = _get_encoding_params()
+            (
+                ffmpeg
+                .output(video, audio, output_path, **enc_params)
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+        else:
+            # Multiple segments: use filter_complex with chained xfades
+            # This is complex with ffmpeg-python, so we'll use subprocess directly
+            _concatenate_multiple_with_xfade(normalized_files, durations, output_path, crossfade_duration)
+
+        print("[Render] Crossfade concatenation complete")
+
+    except ffmpeg.Error as e:
+        error_msg = e.stderr.decode() if e.stderr else "no stderr"
+        print(f"[Render] Crossfade failed: {error_msg}")
+        print(f"[Render] Falling back to simple concatenation...")
+        _concatenate_simple(segment_files, output_path)
+
+
+def _concatenate_multiple_with_xfade(
+    files: list[str],
+    durations: list[float],
+    output_path: str,
+    crossfade_duration: float,
+) -> None:
+    """Concatenate multiple segments with xfade using raw ffmpeg command.
+
+    Uses filter_complex to chain multiple xfade filters.
+    """
+    n = len(files)
+
+    # Build input arguments
+    inputs = []
+    for f in files:
+        inputs.extend(["-i", f])
+
+    # Build filter_complex string
+    # We chain xfades: [0][1]xfade -> [v01], [v01][2]xfade -> [v012], etc.
+    # For audio: same pattern with acrossfade
+
+    video_filters = []
+    audio_filters = []
+
+    # Calculate offsets for each transition
+    # offset[i] = sum of durations[0:i+1] - (i+1) * crossfade_duration
+    cumulative_duration = 0
+
+    for i in range(n - 1):
+        cumulative_duration += durations[i]
+        offset = cumulative_duration - (i + 1) * crossfade_duration
+        if offset < 0:
+            offset = 0
+
+        if i == 0:
+            # First xfade: [0:v][1:v]
+            video_filters.append(
+                f"[0:v][1:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset:.3f}[v{i}]"
+            )
+            audio_filters.append(
+                f"[0:a][1:a]acrossfade=d={crossfade_duration}[a{i}]"
+            )
+        else:
+            # Chain from previous result
+            video_filters.append(
+                f"[v{i-1}][{i+1}:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset:.3f}[v{i}]"
+            )
+            audio_filters.append(
+                f"[a{i-1}][{i+1}:a]acrossfade=d={crossfade_duration}[a{i}]"
+            )
+
+    # Combine all filters
+    filter_complex = ";".join(video_filters + audio_filters)
+
+    # Final output labels
+    final_video = f"[v{n-2}]"
+    final_audio = f"[a{n-2}]"
+
+    # Build full command
+    enc_params = _get_encoding_params()
+    cmd = ["ffmpeg", "-y"] + inputs + [
+        "-filter_complex", filter_complex,
+        "-map", final_video,
+        "-map", final_audio,
+        "-vcodec", enc_params.get("vcodec", "libx264"),
+        "-acodec", enc_params.get("acodec", "aac"),
+        "-pix_fmt", enc_params.get("pix_fmt", "yuv420p"),
+        "-movflags", "+faststart",
+    ]
+
+    # Add video-specific encoding params
+    if "crf" in enc_params:
+        cmd.extend(["-crf", str(enc_params["crf"])])
+    elif "video_bitrate" in enc_params:
+        cmd.extend(["-b:v", enc_params["video_bitrate"]])
+
+    cmd.append(output_path)
+
+    print(f"[Render] Running xfade command with {n} inputs...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg xfade failed: {result.stderr[:500]}")
+
+
+def _concatenate_simple(segment_files: list[str], output_path: str) -> None:
+    """Simple concatenation fallback using concat demuxer."""
     concat_list_path = output_path + ".txt"
     with open(concat_list_path, "w") as f:
         for segment in segment_files:
             f.write(f"file '{segment}'\n")
 
     try:
-        # Stream copy is ~100x faster than re-encoding
+        enc_params = _get_encoding_params()
         (
             ffmpeg
             .input(concat_list_path, format="concat", safe=0)
-            .output(output_path, vcodec="copy", acodec="copy", movflags="+faststart")
+            .output(output_path, **enc_params)
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
-        print(f"[Render] Fast concat complete")
-    except ffmpeg.Error as e:
-        print(f"[Render] Fast concat failed, falling back to re-encode: {e.stderr.decode() if e.stderr else 'no stderr'}")
-        # Fall back to re-encoding if stream copy fails (e.g., incompatible segments)
-        try:
-            enc_params = _get_encoding_params()
-            (
-                ffmpeg
-                .input(concat_list_path, format="concat", safe=0)
-                .output(output_path, **enc_params)
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-        except ffmpeg.Error as e2:
-            print(f"[Render] Re-encode also failed: {e2.stderr.decode() if e2.stderr else 'no stderr'}")
-            raise
     finally:
-        # Clean up temp file
         if os.path.exists(concat_list_path):
             os.remove(concat_list_path)
 
@@ -377,6 +576,7 @@ def apply_zooms_to_segments(
     segments: list[dict],
     zooms: list[dict],
     tmpdir: str,
+    original_to_extracted: dict[int, int] | None = None,
 ) -> list[str]:
     """Apply Ken Burns zoom effects to segments containing zoom moments.
 
@@ -385,6 +585,7 @@ def apply_zooms_to_segments(
         segments: Timeline segments
         zooms: Zoom moments from timeline
         tmpdir: Temp directory for intermediate files
+        original_to_extracted: Mapping from original segment index to extracted file index
 
     Returns:
         Updated list of segment files (some may be replaced with zoomed versions)
@@ -400,25 +601,38 @@ def apply_zooms_to_segments(
         zoom_duration = zoom.get("duration_ms", 3000) / 1000
         zoom_factor = zoom.get("zoom_factor", VideoConfig.ZOOM_FACTOR_MED)
 
-        for i, segment in enumerate(segments):
+        for seg_idx, segment in enumerate(segments):
             if segment["start_ms"] <= zoom_start < segment["end_ms"]:
+                # Use mapping if available, otherwise fall back to direct index
+                if original_to_extracted is not None:
+                    if seg_idx not in original_to_extracted:
+                        print(f"[Render] Zoom target segment {seg_idx} was not extracted, skipping zoom")
+                        break
+                    file_idx = original_to_extracted[seg_idx]
+                else:
+                    file_idx = seg_idx
+                    if file_idx >= len(result_files):
+                        print(f"[Render] Zoom target index {file_idx} out of range, skipping zoom")
+                        break
+
                 # Apply zoom to this segment
-                zoomed_path = os.path.join(tmpdir, f"zoomed_{i:04d}.mp4")
+                zoomed_path = os.path.join(tmpdir, f"zoomed_{seg_idx:04d}.mp4")
 
                 # Time within segment
                 segment_offset = (zoom_start - segment["start_ms"]) / 1000
 
                 try:
                     apply_ken_burns_zoom(
-                        input_path=result_files[i],
+                        input_path=result_files[file_idx],
                         output_path=zoomed_path,
                         start_sec=segment_offset,
                         duration_sec=zoom_duration,
                         zoom_factor=zoom_factor,
                     )
-                    result_files[i] = zoomed_path
+                    result_files[file_idx] = zoomed_path
+                    print(f"[Render] Applied zoom to segment {seg_idx} (file idx {file_idx})")
                 except Exception as e:
-                    print(f"Failed to apply zoom: {e}")
+                    print(f"[Render] Failed to apply zoom to segment {seg_idx}: {e}")
 
                 break
 

@@ -263,14 +263,19 @@ def score_angle_at_time(
         embedding_score = 15
 
     # ALWAYS apply time-based rotation when we have multiple videos
-    # This ensures variety even when embeddings exist but don't differentiate well
+    # This GUARANTEES variety by giving strong rotation boost
     if total_videos > 1:
         switch_interval_ms = 4000  # 4 second intervals
         time_slot = (time_ms // switch_interval_ms) % total_videos
         if time_slot == video_index:
-            # Give rotation boost - stronger if no good embedding signal
-            rotation_boost = 30 if embedding_score < 20 else 15
+            # Strong rotation boost that ALWAYS overrides embedding scores
+            # This guarantees each video gets its fair share of screen time
+            rotation_boost = 50
             embedding_score += rotation_boost
+        else:
+            # Penalize videos that aren't in their rotation slot
+            # This ensures we actually switch angles, not just give bonus
+            embedding_score -= 15
 
     total_score = base_score + profile_score + embedding_score
     return min(total_score, 100)
