@@ -9,7 +9,7 @@ from typing import Literal
 
 import ffmpeg
 
-from config import VideoConfig, MUSIC_MIX_PROFILES
+from config import VideoConfig, MUSIC_MIX_PROFILES, CROSSFADE_DURATION_BY_EVENT, DEFAULT_CROSSFADE_DURATION
 
 # Number of parallel segment extractions (balance between speed and system load)
 MAX_PARALLEL_EXTRACTIONS = 4
@@ -154,6 +154,83 @@ def _extract_segments_parallel(tasks: list[dict]) -> tuple[list[str], list[int]]
     return [results[i] for i in sorted_indices], sorted_indices
 
 
+def validate_timeline_for_render(
+    segments: list[dict],
+    video_map: dict,
+    tolerance_ms: int = 100,
+) -> tuple[bool, list[str]]:
+    """Validate timeline before rendering to catch issues early.
+
+    Checks for:
+    - Continuity (no gaps > tolerance between segments)
+    - All referenced videos exist
+    - Sync offsets are reasonable (not > 5s)
+    - Segments have positive duration
+
+    Args:
+        segments: List of segment dicts with start_ms, end_ms, video_id
+        video_map: Dict mapping video_id to video dict
+        tolerance_ms: Maximum allowed gap between segments in milliseconds
+
+    Returns:
+        Tuple of (is_valid, list of error messages)
+    """
+    errors = []
+    warnings = []
+
+    if not segments:
+        errors.append("No segments in timeline")
+        return False, errors
+
+    # Check each segment
+    for i, seg in enumerate(segments):
+        # Check positive duration
+        duration = seg["end_ms"] - seg["start_ms"]
+        if duration <= 0:
+            errors.append(f"Segment {i} has non-positive duration: {duration}ms")
+
+        # Check video exists
+        if seg["video_id"] not in video_map:
+            errors.append(f"Segment {i} references missing video: {seg['video_id']}")
+
+    # Check continuity between segments
+    for i, seg in enumerate(segments[:-1]):
+        gap = segments[i + 1]["start_ms"] - seg["end_ms"]
+        if gap > tolerance_ms:
+            errors.append(f"Gap of {gap}ms between segments {i} and {i+1}")
+        elif gap < -tolerance_ms:
+            warnings.append(f"Overlap of {-gap}ms between segments {i} and {i+1}")
+
+    # Check sync offsets
+    for vid_id, vid in video_map.items():
+        offset = vid.get("sync_offset_ms", 0)
+        if abs(offset) > 5000:
+            warnings.append(f"Large sync offset ({offset}ms) for video {vid_id[:8]}...")
+
+    # Log warnings
+    for w in warnings:
+        print(f"[Render:Validate] WARNING: {w}")
+
+    is_valid = len(errors) == 0
+    if errors:
+        for e in errors:
+            print(f"[Render:Validate] ERROR: {e}")
+
+    return is_valid, errors
+
+
+def get_crossfade_duration(event_type: str) -> float:
+    """Get the appropriate crossfade duration for an event type.
+
+    Args:
+        event_type: Type of event (sports, ceremony, performance, etc.)
+
+    Returns:
+        Crossfade duration in seconds
+    """
+    return CROSSFADE_DURATION_BY_EVENT.get(event_type, DEFAULT_CROSSFADE_DURATION)
+
+
 def render_final_video(
     video_paths: list[dict],
     timeline: dict,
@@ -288,11 +365,12 @@ def render_final_video(
         else:
             print(f"[Render] No zoom effects to apply")
 
-        # Concatenate segments with crossfades
+        # Concatenate segments with crossfades (adaptive duration based on event type)
         print(f"[Render] ---------- CONCATENATING SEGMENTS ----------")
         concat_path = os.path.join(tmpdir, "concat.mp4")
-        print(f"[Render] Concatenating {len(segment_files)} segments with crossfades...")
-        concatenate_with_crossfades(segment_files, concat_path)
+        crossfade_duration = get_crossfade_duration(event_type)
+        print(f"[Render] Concatenating {len(segment_files)} segments with {crossfade_duration}s crossfades ({event_type} style)...")
+        concatenate_with_crossfades(segment_files, concat_path, crossfade_duration=crossfade_duration)
         print(f"[Render] Concatenation complete")
 
         # Insert generated ads if provided

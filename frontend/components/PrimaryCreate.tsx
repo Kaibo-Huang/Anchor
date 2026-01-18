@@ -2,8 +2,10 @@ import React, {useEffect, useState} from 'react'
 import Button from '@mui/material/Button';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import {styled} from "@mui/system";
-import {IconButton, TextField, Typography} from "@mui/material";
+import {IconButton, TextField, Typography, CircularProgress} from "@mui/material";
 import SendIcon from '@mui/icons-material/Send';
+import { useRouter } from 'next/navigation';
+import { createEvent, uploadVideoV2, uploadMusic, analyzeMusic } from '@/lib/api';
 
 const imgVector = "/anchor-wave.svg"
 const imgAnchorLogo22 = "/Anchor FInal.svg"
@@ -36,6 +38,7 @@ const infoContent = [
 ]
 
 export default function PrimaryCreate() {
+    const router = useRouter();
     const [step, setStep] = React.useState(0);
     const [videoContext, setVideoContext] = React.useState("");
 
@@ -55,12 +58,63 @@ export default function PrimaryCreate() {
     // State to track when step 4 animation is complete (elements should be removed)
     const [step4AnimationComplete, setStep4AnimationComplete] = useState(false);
 
-    // Handle sending the chat message
-    const handleSend = () => {
-        if (chatInput.trim()) {
+    // Backend integration state
+    const [videoFiles, setVideoFiles] = useState<File[]>([]);
+    const [musicFile, setMusicFile] = useState<File | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [processingMessage, setProcessingMessage] = useState("");
+
+    // Handle sending the chat message and creating event
+    const handleSend = async () => {
+        if (chatInput.trim() && videoFiles.length > 0) {
             setStep(4);
-            console.log("Sending context:", chatInput);
-            // Add your send logic here (e.g., API call)
+            setIsProcessing(true);
+
+            try {
+                // Step 1: Create event with the user's description
+                setProcessingMessage("Creating your event...");
+                const event = await createEvent({
+                    name: chatInput.trim(),
+                    event_type: 'sports' // Default, could be inferred from description
+                });
+
+                console.log("Event created:", event);
+
+                // Step 2: Upload videos
+                setProcessingMessage(`Uploading ${videoFiles.length} video${videoFiles.length > 1 ? 's' : ''}...`);
+                const videoUploads = videoFiles.map((file, index) =>
+                    uploadVideoV2(event.id, file, 'wide', (stage, progress) => {
+                        console.log(`Video ${index + 1} ${stage}: ${progress}%`);
+                    })
+                );
+
+                await Promise.all(videoUploads);
+                console.log("All videos uploaded");
+
+                // Step 3: Upload music if provided
+                if (musicFile) {
+                    setProcessingMessage("Uploading music...");
+                    await uploadMusic(event.id, musicFile);
+                    console.log("Music uploaded");
+
+                    // Trigger music analysis
+                    setProcessingMessage("Analyzing music beats...");
+                    await analyzeMusic(event.id);
+                    console.log("Music analyzed");
+                }
+
+                // Step 4: Navigate to event page
+                setProcessingMessage("Taking you to your event...");
+                setTimeout(() => {
+                    router.push(`/events/${event.id}`);
+                }, 500);
+
+            } catch (error) {
+                console.error("Error creating event:", error);
+                setProcessingMessage("Error: " + (error instanceof Error ? error.message : "Something went wrong"));
+                setIsProcessing(false);
+            }
+
             setChatInput("");
         }
     };
@@ -141,22 +195,6 @@ export default function PrimaryCreate() {
                 <img src={imgAnchorLogo22} alt="Anchor logo" className="w-full h-auto object-contain"/>
             </div>
 
-            {/*<Typography variant="h1" gutterBottom*/}
-            {/*            sx={{*/}
-            {/*                position: 'absolute',*/}
-            {/*                left: '25vw',*/}
-            {/*                top: '76vh',*/}
-            {/*                zIndex: 10,*/}
-            {/*                color: "#383A42",*/}
-            {/*                animation: step > 2 ? 'fade-in 0.5s ease-in-out forwards' : 'none',*/}
-            {/*                animationDelay: "1s",*/}
-            {/*                transition: 'opacity 0.5s ease-in-out',*/}
-            {/*                opacity: "0",*/}
-            {/*            }}*/}
-            {/*>*/}
-            {/*    Now tell us what you're looking for.*/}
-            {/*</Typography>*/}
-
             {/* Blue screen background - revealed when content slides away */}
             <div
                 className="fixed inset-0 z-0"
@@ -166,6 +204,23 @@ export default function PrimaryCreate() {
                     transition: 'opacity 0.4s ease-in-out'
                 }}
             />
+
+            {/* Processing overlay */}
+            {isProcessing && (
+                <div
+                    className="fixed inset-0 flex flex-col items-center justify-center"
+                    style={{
+                        zIndex: 100,
+                        backgroundColor: 'rgba(64, 120, 242, 0.95)',
+                    }}
+                >
+                    <CircularProgress size={60} sx={{ color: 'white', marginBottom: '2rem' }} />
+                    <Typography variant="h3" sx={{ color: 'white', textAlign: 'center' }}>
+                        {processingMessage}
+                    </Typography>
+                </div>
+            )}
+
             {!step4AnimationComplete && <div className={step >= 4 ? 'slide-up-off-screen' : ''}>
                 {/* AI Chatbot-style interface that appears after animation completes */}
                 {animationComplete && (
@@ -189,14 +244,15 @@ export default function PrimaryCreate() {
                                     variant="h1"
                                     sx={{
                                         fontWeight: 600,
-                                        marginBottom: '0.5rem'
+                                        marginBottom: '0.5rem',
+                                        color: 'white'
                                     }}
                                 >
                                     What kind of video do<br/> you want?
                                 </Typography>
                                 <Typography
                                     variant="body1"
-                                    sx={{color: '#CFD0D1'}}
+                                    sx={{color: 'rgba(255, 255, 255, 0.8)'}}
                                 >
                                     Describe your vision and we&apos;ll help bring it to life
                                 </Typography>
@@ -218,10 +274,11 @@ export default function PrimaryCreate() {
                                     value={chatInput}
                                     onChange={(e) => setChatInput(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="Describe your video... (e.g., 'A highlight reel with exciting moments and upbeat music')"
+                                    placeholder="e.g., 'Find my best moments from the game' or 'Create a highlight reel with high energy'"
                                     multiline
                                     fullWidth
                                     variant="outlined"
+                                    disabled={isProcessing}
                                     sx={{
                                         '& .MuiOutlinedInput-root': {
                                             borderRadius: '20px',
@@ -253,13 +310,13 @@ export default function PrimaryCreate() {
                                 <IconButton
                                     className="send-button"
                                     onClick={handleSend}
-                                    disabled={!chatInput.trim()}
+                                    disabled={!chatInput.trim() || videoFiles.length === 0 || isProcessing}
                                     sx={{
                                         width: 40,
                                         height: 40,
-                                        backgroundColor: chatInput.trim() ? '#4078F2' : '#d1d5db',
+                                        backgroundColor: (chatInput.trim() && videoFiles.length > 0 && !isProcessing) ? '#4078F2' : '#d1d5db',
                                         '&:hover': {
-                                            backgroundColor: chatInput.trim() ? '#2d5bd9' : '#d1d5db',
+                                            backgroundColor: (chatInput.trim() && videoFiles.length > 0 && !isProcessing) ? '#2d5bd9' : '#d1d5db',
                                         },
                                         '&.Mui-disabled': {
                                             backgroundColor: '#d1d5db',
@@ -280,7 +337,9 @@ export default function PrimaryCreate() {
                                     flexShrink: 0,
                                 }}
                             >
-                                Press Enter to send, Shift + Enter for new line
+                                {videoFiles.length === 0 ?
+                                    'Please upload at least one video first' :
+                                    'Press Enter to send, Shift + Enter for new line'}
                             </Typography>
                         </div>
                     </div>
@@ -336,7 +395,9 @@ export default function PrimaryCreate() {
                                 type="file"
                                 accept="video/*"
                                 onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                                    console.log(event.target.files)
+                                    const files = Array.from(event.target.files || []) as File[];
+                                    console.log("Video files selected:", files);
+                                    setVideoFiles(files);
                                     setStep(1);
                                 }}
                                 multiple
@@ -367,8 +428,15 @@ export default function PrimaryCreate() {
                             }}
                             sx={{
                                 minWidth: '22vw',
+                                '& .MuiOutlinedInput-root': {
+                                    '& textarea': {
+                                        color: 'white',
+                                        caretColor: 'white',
+                                    },
+                                },
                                 '& .MuiOutlinedInput-input': {
                                     color: 'white',
+                                    caretColor: 'white',
                                 },
                                 '& .MuiOutlinedInput-input::placeholder': {
                                     color: 'rgba(255, 255, 255, 0.7)',
@@ -441,10 +509,13 @@ export default function PrimaryCreate() {
                                 type="file"
                                 accept="audio/*"
                                 onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                                    console.log(event.target.files)
+                                    const files = event.target.files;
+                                    if (files && files.length > 0) {
+                                        console.log("Music file selected:", files[0]);
+                                        setMusicFile(files[0]);
+                                    }
                                     setStep(3);
                                 }}
-                                multiple
                             />
                         </Button>
                     </div>}

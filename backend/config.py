@@ -146,3 +146,16 @@ SPEAKER_SCORE_MULTIPLIERS = {
     "podium": 2.0,        # 2x boost for podium angle during speech
     "stage_closeup": 2.0, # 2x boost for stage closeup
 }
+
+# Adaptive crossfade durations by event type (in seconds)
+# Faster events = shorter transitions, calmer events = smoother transitions
+CROSSFADE_DURATION_BY_EVENT = {
+    "sports": 0.3,        # Fast cuts for action
+    "ceremony": 0.7,      # Smooth, professional transitions
+    "performance": 0.5,   # Balanced for music
+    "speech": 0.7,        # Calm, respectful
+    "lecture": 0.8,       # Very smooth for educational content
+}
+
+# Default crossfade duration if event type not found
+DEFAULT_CROSSFADE_DURATION = 0.5

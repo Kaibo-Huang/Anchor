@@ -1,5 +1,6 @@
 """Timeline generation service for multi-angle video switching."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 import numpy as np
@@ -77,8 +78,18 @@ def generate_timeline(
 
     print(f"[Timeline] Selected {len(selected_moments)}/{total_windows} moments (quality threshold: {VideoConfig.MIN_SEGMENT_QUALITY_SCORE})")
 
+    # Pass 2.5: Fill gaps to ensure continuous timeline coverage
+    filled_moments = fill_timeline_gaps(
+        selected_moments,
+        all_moments,
+        videos,
+        target_duration_ms,
+    )
+
+    print(f"[Timeline] After gap-fill: {len(filled_moments)} moments covering {target_duration_ms/1000:.0f}s")
+
     # Build variable-length segments from selected moments with hysteresis
-    segments = build_variable_segments(selected_moments, event_type, min_segment_ms)
+    segments = build_variable_segments(filled_moments, event_type, min_segment_ms)
 
     # Log video usage before diversity enforcement
     if segments:
@@ -374,7 +385,7 @@ def build_scene_contexts(
     # Sort by start time
     all_embeddings.sort(key=lambda x: x["start_ms"])
 
-    # Try to detect scene types using TwelveLabs search
+    # Try to detect scene types using TwelveLabs search (PARALLELIZED)
     scene_type_cache = {}
     if index_id:
         # Define scene type queries based on event type
@@ -398,20 +409,34 @@ def build_scene_contexts(
             ],
         }
 
-        for scene_type, query in scene_queries.get(event_type, []):
+        def _search_scene_type(scene_type: str, query: str) -> tuple[str, list]:
+            """Search for a single scene type. Runs in parallel."""
             try:
                 results = search_videos(index_id, query, limit=5)
-                for result in results:
-                    start_ms = int(result["start"] * 1000)
-                    end_ms = int(result["end"] * 1000)
-                    confidence = result.get("confidence", 0.5)
-                    if confidence > 0.6:
-                        scene_type_cache[(start_ms, end_ms)] = {
-                            "scene_type": scene_type,
-                            "confidence": confidence,
-                        }
+                return scene_type, results
             except Exception:
-                pass  # Continue without scene detection if search fails
+                return scene_type, []
+
+        queries_to_run = scene_queries.get(event_type, [])
+        if queries_to_run:
+            print(f"[Timeline] Running {len(queries_to_run)} scene detection queries in parallel...")
+            with ThreadPoolExecutor(max_workers=min(4, len(queries_to_run))) as executor:
+                futures = {
+                    executor.submit(_search_scene_type, st, q): st
+                    for st, q in queries_to_run
+                }
+                for future in as_completed(futures):
+                    scene_type, results = future.result()
+                    for result in results:
+                        start_ms = int(result["start"] * 1000)
+                        end_ms = int(result["end"] * 1000)
+                        confidence = result.get("confidence", 0.5)
+                        if confidence > 0.6:
+                            scene_type_cache[(start_ms, end_ms)] = {
+                                "scene_type": scene_type,
+                                "confidence": confidence,
+                            }
+            print(f"[Timeline] Scene detection complete: {len(scene_type_cache)} scenes identified")
 
     # Build scene contexts from embeddings
     for emb in all_embeddings:
@@ -615,6 +640,79 @@ def select_best_moments(
     return selected
 
 
+def fill_timeline_gaps(
+    selected_moments: list[dict],
+    all_moments: list[dict],
+    videos: list[dict],
+    duration_ms: int,
+) -> list[dict]:
+    """Fill gaps in the selected timeline to ensure continuous coverage.
+
+    When select_best_moments skips low-quality timestamps, this creates gaps.
+    This function fills those gaps with the best available angle at each timestamp.
+
+    Args:
+        selected_moments: Selected moments from select_best_moments (sorted by time)
+        all_moments: All scored moments from score_all_moments
+        videos: List of video dicts for fallback
+        duration_ms: Total duration in milliseconds
+
+    Returns:
+        List of moments with no gaps, sorted by time
+    """
+    if not selected_moments:
+        # Edge case: nothing selected, use first video for entire duration
+        return [
+            {
+                "time_ms": t_ms,
+                "video_id": videos[0]["id"],
+                "video": videos[0],
+                "score": 25,
+                "engagement": 50,
+                "scene_context": None,
+            }
+            for t_ms in range(0, duration_ms, 2000)
+        ]
+
+    # Create time -> moment mapping for selected moments
+    selected_map = {m["time_ms"]: m for m in selected_moments}
+
+    # Create time -> best moment mapping for ALL moments (for gap filling)
+    all_by_time = {}
+    for m in all_moments:
+        t = m["time_ms"]
+        if t not in all_by_time or m["score"] > all_by_time[t]["score"]:
+            all_by_time[t] = m
+
+    filled = []
+    gaps_filled = 0
+
+    for t_ms in range(0, duration_ms, 2000):
+        if t_ms in selected_map:
+            # Use selected moment
+            filled.append(selected_map[t_ms])
+        elif t_ms in all_by_time:
+            # Gap: use best available (even if below quality threshold)
+            filled.append(all_by_time[t_ms])
+            gaps_filled += 1
+        else:
+            # No moment scored for this time (shouldn't happen, but handle gracefully)
+            filled.append({
+                "time_ms": t_ms,
+                "video_id": videos[0]["id"],
+                "video": videos[0],
+                "score": 25,
+                "engagement": 50,
+                "scene_context": None,
+            })
+            gaps_filled += 1
+
+    if gaps_filled > 0:
+        print(f"[Timeline] Filled {gaps_filled} gaps in timeline with best available angles")
+
+    return filled
+
+
 def build_variable_segments(
     selected_moments: list[dict],
     event_type: str = "sports",
@@ -666,10 +764,36 @@ def build_variable_segments(
             current_segment["total_score"] += moment["score"]
             current_segment["total_engagement"] += moment["engagement"]
             current_segment["moment_count"] += 1
+
+            # HARD CAP: Force finalize if we hit max duration
+            if current_segment["end_ms"] - current_segment["start_ms"] >= VideoConfig.MAX_SEGMENT_DURATION_MS:
+                segments.append({
+                    "start_ms": current_segment["start_ms"],
+                    "end_ms": current_segment["end_ms"],
+                    "video_id": current_segment["video_id"],
+                })
+                current_segment = None  # Will be started fresh on next moment
         else:
             # Hysteresis check: only switch if new angle is significantly better
             current_duration = current_segment["end_ms"] - current_segment["start_ms"]
             current_avg_score = current_segment["total_score"] / current_segment["moment_count"]
+
+            # HARD CAP: If at max duration, must switch regardless
+            if current_duration >= VideoConfig.MAX_SEGMENT_DURATION_MS:
+                segments.append({
+                    "start_ms": current_segment["start_ms"],
+                    "end_ms": current_segment["end_ms"],
+                    "video_id": current_segment["video_id"],
+                })
+                current_segment = {
+                    "start_ms": moment["time_ms"],
+                    "end_ms": moment["time_ms"] + 2000,
+                    "video_id": moment["video_id"],
+                    "total_score": moment["score"],
+                    "total_engagement": moment["engagement"],
+                    "moment_count": 1,
+                }
+                continue
 
             # If below minimum duration, MUST extend (don't switch)
             if current_duration < effective_min_ms:
@@ -875,12 +999,24 @@ def generate_ad_slots(
     Returns:
         List of ad slots with timestamp_ms, score, duration_ms
     """
-    # Don't place ads in first/last 10 seconds
-    start_ms = 10000
-    end_ms = duration_ms - 10000
+    # Adaptive buffer: For short videos (< 60s), use smaller buffer to ensure at least 1 ad slot
+    # For longer videos, maintain 10s buffer for professional quality
+    if duration_ms < 60000:  # Less than 1 minute
+        buffer_ms = min(5000, duration_ms // 4)  # 5s buffer or 25% of duration, whichever is smaller
+    else:
+        buffer_ms = 10000  # Standard 10s buffer for longer videos
+
+    start_ms = buffer_ms
+    end_ms = duration_ms - buffer_ms
 
     if end_ms <= start_ms:
-        return []
+        # Video too short for ads - place one ad in the middle
+        print(f"[Timeline] Video too short ({duration_ms}ms) for buffered ad placement, placing ad at midpoint")
+        return [{
+            "timestamp_ms": duration_ms // 2,
+            "score": 50,  # Medium score
+            "duration_ms": 4000,
+        }]
 
     # Get blocked and boosted scene types from profile
     ad_block_scenes = profile.get("ad_block_scenes", [])
@@ -1029,12 +1165,23 @@ def generate_ad_slots(
                 break
 
     # ENSURE AT LEAST 1 AD: If no slots met threshold, force select best candidate
-    if not selected_slots and candidate_slots:
-        print("[Timeline] No ad slots met threshold, forcing best candidate to ensure at least 1 ad")
-        selected_slots.append(candidate_slots[0])  # Take highest-scoring slot
+    if not selected_slots:
+        if candidate_slots:
+            print("[Timeline] No ad slots met threshold, forcing best candidate to ensure at least 1 ad")
+            selected_slots.append(candidate_slots[0])  # Take highest-scoring slot
+        else:
+            # No candidates at all (shouldn't happen with new buffer logic, but handle gracefully)
+            print("[Timeline] No candidate slots found, placing fallback ad at midpoint")
+            selected_slots.append({
+                "timestamp_ms": duration_ms // 2,
+                "score": 50,
+                "duration_ms": 4000,
+            })
 
     # Sort by timestamp for output
     selected_slots.sort(key=lambda x: x["timestamp_ms"])
+
+    print(f"[Timeline] Generated {len(selected_slots)} ad slot(s) (min score: {min(s['score'] for s in selected_slots):.1f}, max score: {max(s['score'] for s in selected_slots):.1f})")
 
     return selected_slots
 
