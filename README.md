@@ -51,4 +51,10 @@ The system processes footage through a six-stage pipeline:
 5. **Video Assembly**: FFmpeg renders the final output by cutting clips using TwelveLabs timestamps, applying zoom on high-action moments, concatenating with crossfades, and mixing audio with intelligent ducking during speech.
 
 6. **Native Sponsorships**: Google Veo generates product videos matching the footage's visual style. These are inserted at natural transition points using FFmpeg crossfades. Products are fetched from connected Shopify stores via OAuth.
-```
+
+## Challenges we ran into
+
+* Parallelizing and batch processing video processing for TwelveLabs
+* Compressing audio and optimizing upload speed to AWS S3 Bucket
+* Making the editing/transitions not bad
+* Setting up Celery and Redis and the jobs
