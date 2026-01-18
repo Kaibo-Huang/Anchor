@@ -50,13 +50,15 @@ def generate_timeline(
         best_video = None
         best_score = -1
 
-        for video in videos:
+        for video_idx, video in enumerate(videos):
             score = score_angle_at_time(
                 video=video,
                 time_ms=t_ms,
                 profile=profile,
                 index_id=index_id,
                 scene_context=scene_context,
+                video_index=video_idx,
+                total_videos=len(videos),
             )
 
             if score > best_score:
@@ -84,6 +86,59 @@ def generate_timeline(
             "end_ms": duration_ms,
             "video_id": current_video,
         })
+
+    # Validate: ensure all videos are used at least once
+    used_video_ids = {s["video_id"] for s in segments}
+    all_video_ids = {v["id"] for v in videos}
+    missing_videos = all_video_ids - used_video_ids
+
+    if missing_videos and len(videos) > 1:
+        print(f"[Timeline] WARNING: {len(missing_videos)} videos not used in timeline, forcing inclusion")
+        # Force-insert missing videos by splitting existing segments
+        for missing_id in missing_videos:
+            # Find the longest segment to split
+            if not segments:
+                break
+            longest_idx = max(range(len(segments)), key=lambda i: segments[i]["end_ms"] - segments[i]["start_ms"])
+            longest = segments[longest_idx]
+            seg_duration = longest["end_ms"] - longest["start_ms"]
+
+            # Only split if segment is long enough (> 8 seconds = 2x minimum)
+            if seg_duration >= VideoConfig.MIN_ANGLE_DURATION_MS * 2:
+                mid_point = longest["start_ms"] + seg_duration // 2
+                # Insert the missing video for MIN_ANGLE_DURATION_MS
+                insert_end = min(mid_point + VideoConfig.MIN_ANGLE_DURATION_MS, longest["end_ms"])
+
+                # Create new segments: [original start -> mid] [missing video] [insert_end -> original end]
+                new_segments = []
+                for i, seg in enumerate(segments):
+                    if i == longest_idx:
+                        # First part of split
+                        if mid_point > seg["start_ms"]:
+                            new_segments.append({
+                                "start_ms": seg["start_ms"],
+                                "end_ms": mid_point,
+                                "video_id": seg["video_id"],
+                            })
+                        # Inserted missing video
+                        new_segments.append({
+                            "start_ms": mid_point,
+                            "end_ms": insert_end,
+                            "video_id": missing_id,
+                        })
+                        # Remaining part of original
+                        if insert_end < seg["end_ms"]:
+                            new_segments.append({
+                                "start_ms": insert_end,
+                                "end_ms": seg["end_ms"],
+                                "video_id": seg["video_id"],
+                            })
+                    else:
+                        new_segments.append(seg)
+                segments = new_segments
+                print(f"[Timeline] Inserted missing video {missing_id} at {mid_point}ms")
+
+    print(f"[Timeline] Final timeline has {len(segments)} segments using {len(set(s['video_id'] for s in segments))} videos")
 
     # Generate zoom moments
     zooms = generate_zoom_moments(videos, duration_ms, index_id)
@@ -114,6 +169,8 @@ def score_angle_at_time(
     profile: dict,
     index_id: str | None,
     scene_context: dict | None = None,
+    video_index: int = 0,
+    total_videos: int = 1,
 ) -> float:
     """Score an angle's suitability at a given time using embeddings.
 
@@ -126,6 +183,8 @@ def score_angle_at_time(
         profile: Switching profile for event type
         index_id: TwelveLabs index for queries
         scene_context: Optional context with current scene embeddings
+        video_index: Index of this video in the list (for tie-breaking)
+        total_videos: Total number of videos (for switching logic)
 
     Returns:
         Score from 0-100
@@ -202,6 +261,16 @@ def score_angle_at_time(
     elif current_embedding:
         # We have embeddings but no context - give base credit
         embedding_score = 15
+
+    # ALWAYS apply time-based rotation when we have multiple videos
+    # This ensures variety even when embeddings exist but don't differentiate well
+    if total_videos > 1:
+        switch_interval_ms = 4000  # 4 second intervals
+        time_slot = (time_ms // switch_interval_ms) % total_videos
+        if time_slot == video_index:
+            # Give rotation boost - stronger if no good embedding signal
+            rotation_boost = 30 if embedding_score < 20 else 15
+            embedding_score += rotation_boost
 
     total_score = base_score + profile_score + embedding_score
     return min(total_score, 100)

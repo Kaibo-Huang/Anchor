@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from services.supabase_client import get_supabase
+from services.s3_client import generate_presigned_download_url, parse_s3_uri
 
 router = APIRouter()
 
@@ -62,7 +63,24 @@ async def get_event(event_id: str):
     if not result.data:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    return EventResponse(**result.data[0])
+    event_data = result.data[0]
+
+    # Convert S3 URIs to presigned URLs for browser access
+    if event_data.get("master_video_url") and event_data["master_video_url"].startswith("s3://"):
+        try:
+            bucket, key = parse_s3_uri(event_data["master_video_url"])
+            event_data["master_video_url"] = generate_presigned_download_url(bucket, key, expires_in=3600)
+        except Exception as e:
+            print(f"Failed to generate presigned URL for master video: {e}")
+
+    if event_data.get("music_url") and event_data["music_url"].startswith("s3://"):
+        try:
+            bucket, key = parse_s3_uri(event_data["music_url"])
+            event_data["music_url"] = generate_presigned_download_url(bucket, key, expires_in=3600)
+        except Exception as e:
+            print(f"Failed to generate presigned URL for music: {e}")
+
+    return EventResponse(**event_data)
 
 
 @router.post("/{event_id}/analyze")
@@ -98,17 +116,28 @@ async def analyze_event(event_id: str):
 
 
 @router.post("/{event_id}/generate")
-async def generate_video(event_id: str):
-    """Generate the final video for an event."""
+async def generate_video(event_id: str, force: bool = False):
+    """Generate the final video for an event.
+
+    Args:
+        event_id: Event ID
+        force: If True, allow re-generation even if already completed
+    """
     supabase = get_supabase()
 
     event = supabase.table("events").select("*").eq("id", event_id).execute()
     if not event.data:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    if event.data[0]["status"] != "analyzed":
+    status = event.data[0]["status"]
+    # Allow regeneration if force=True and status is analyzed or completed
+    if status not in ("analyzed", "completed") and not force:
         raise HTTPException(
             status_code=400, detail="Event must be analyzed before generating video"
+        )
+    if status == "completed" and not force:
+        raise HTTPException(
+            status_code=400, detail="Event already generated. Use ?force=true to regenerate"
         )
 
     # Update status

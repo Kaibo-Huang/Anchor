@@ -31,10 +31,23 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
   const [duration, setDuration] = useState(30)
 
   const generateMutation = useMutation({
-    mutationFn: () => generateReel(eventId, { query, vibe, duration }),
-    onSuccess: () => {
+    mutationFn: () => {
+      console.log(`[ReelGenerator] ========== GENERATING REEL ==========`)
+      console.log(`[ReelGenerator] Event ID: ${eventId}`)
+      console.log(`[ReelGenerator] Query: "${query}"`)
+      console.log(`[ReelGenerator] Vibe: ${vibe}`)
+      console.log(`[ReelGenerator] Duration: ${duration}s`)
+      return generateReel(eventId, { query, vibe, duration })
+    },
+    onSuccess: (data) => {
+      console.log(`[ReelGenerator] Reel generation started`)
+      console.log(`[ReelGenerator] Reel ID: ${data.reel_id}`)
+      console.log(`[ReelGenerator] Invalidating reel queries`)
       queryClient.invalidateQueries({ queryKey: ['reels', eventId] })
       setQuery('')
+    },
+    onError: (error) => {
+      console.error(`[ReelGenerator] Reel generation failed:`, error)
     },
   })
 
@@ -100,7 +113,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
             >
               <div className="text-xl mb-1">{option.icon}</div>
               <div className="font-medium text-sm">{option.label}</div>
-              <div className="text-xs text-gray-500 mt-1">{option.description}</div>
+              <div className="text-xs text-gray-600 mt-1">{option.description}</div>
             </button>
           ))}
         </div>
@@ -120,7 +133,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
           onChange={(e) => setDuration(parseInt(e.target.value))}
           className="w-full"
         />
-        <div className="flex justify-between text-xs text-gray-500">
+        <div className="flex justify-between text-xs text-gray-600">
           <span>15s</span>
           <span>60s</span>
         </div>
@@ -150,7 +163,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
               <div key={reel.id} className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
                 <div>
                   <p className="font-medium text-sm">&quot;{reel.query}&quot;</p>
-                  <p className="text-xs text-gray-500">{reel.vibe} - {reel.duration_sec}s</p>
+                  <p className="text-xs text-gray-700">{reel.vibe} - {reel.duration_sec}s</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-600"></div>
@@ -171,7 +184,7 @@ export default function PersonalReelGenerator({ eventId, reels }: PersonalReelGe
               <div key={reel.id} className="border rounded-lg overflow-hidden">
                 <div className="p-3 bg-gray-50 border-b">
                   <p className="font-medium">&quot;{reel.query}&quot;</p>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-gray-700">
                     {reel.vibe} - {reel.duration_sec}s - {reel.moments?.length || 0} moments
                   </p>
                 </div>

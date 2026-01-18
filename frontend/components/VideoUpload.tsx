@@ -25,26 +25,39 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
     file: File
     angleType: string
     progress: number
+    stage: 'preparing' | 'uploading' | 'finalizing' | null
     status: 'pending' | 'uploading' | 'done' | 'error'
     error?: string
   }>>([])
 
   const uploadMutation = useMutation({
     mutationFn: async ({ file, angleType, index }: { file: File; angleType: string; index: number }) => {
+      console.log(`[VideoUpload] Starting upload for file: ${file.name}`)
+      console.log(`[VideoUpload] File size: ${(file.size / (1024 * 1024)).toFixed(1)} MB`)
+      console.log(`[VideoUpload] Angle type: ${angleType}`)
+
       setUploads(prev => prev.map((u, i) =>
-        i === index ? { ...u, status: 'uploading' as const, progress: 50 } : u
+        i === index ? { ...u, status: 'uploading' as const, stage: 'preparing' as const, progress: 0 } : u
       ))
 
-      await uploadVideo(eventId, file, angleType)
+      await uploadVideo(eventId, file, angleType, (stage, progress) => {
+        console.log(`[VideoUpload] Stage: ${stage}, Progress: ${progress}%`)
+        setUploads(prev => prev.map((u, i) =>
+          i === index ? { ...u, stage, progress } : u
+        ))
+      })
 
+      console.log(`[VideoUpload] Upload complete for: ${file.name}`)
       setUploads(prev => prev.map((u, i) =>
-        i === index ? { ...u, status: 'done' as const, progress: 100 } : u
+        i === index ? { ...u, status: 'done' as const, stage: null, progress: 100 } : u
       ))
     },
     onSuccess: () => {
+      console.log(`[VideoUpload] Invalidating video queries for event: ${eventId}`)
       queryClient.invalidateQueries({ queryKey: ['videos', eventId] })
     },
     onError: (error, { index }) => {
+      console.error(`[VideoUpload] Upload failed:`, error)
       setUploads(prev => prev.map((u, i) =>
         i === index ? { ...u, status: 'error' as const, error: error.message } : u
       ))
@@ -52,10 +65,14 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
   })
 
   const addFiles = useCallback((files: File[]) => {
+    console.log(`[VideoUpload] Adding ${files.length} files to upload queue`)
+    files.forEach(f => console.log(`[VideoUpload]   - ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`))
+
     const newUploads = files.map(file => ({
       file,
       angleType: 'wide',
       progress: 0,
+      stage: null as 'preparing' | 'uploading' | 'finalizing' | null,
       status: 'pending' as const,
     }))
     setUploads(prev => [...prev, ...newUploads])
@@ -138,7 +155,7 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
             className="hidden"
           />
         </label>
-        <p className="text-sm text-gray-400 mt-2">Supports MP4, MOV, AVI (max 12 videos)</p>
+        <p className="text-sm text-gray-600 mt-2">Supports MP4, MOV, AVI (max 12 videos)</p>
       </div>
 
       {/* Existing Videos */}
@@ -152,7 +169,7 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
                   <span className="text-green-500">✓</span>
                   <span className="text-sm">{video.angle_type}</span>
                 </div>
-                <span className="text-xs text-gray-500">{video.status}</span>
+                <span className="text-xs text-gray-700">{video.status}</span>
               </div>
             ))}
           </div>
@@ -200,14 +217,18 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
                         </button>
                         <button
                           onClick={() => removeUpload(index)}
-                          className="text-gray-400 hover:text-red-500"
+                          className="text-gray-600 hover:text-red-500"
                         >
                           ✕
                         </button>
                       </>
                     )}
                     {upload.status === 'uploading' && (
-                      <span className="text-sm text-indigo-600">Uploading...</span>
+                      <span className="text-sm text-indigo-600 font-medium">
+                        {upload.stage === 'preparing' && 'Preparing...'}
+                        {upload.stage === 'uploading' && `Uploading ${upload.progress}%`}
+                        {upload.stage === 'finalizing' && 'Finalizing...'}
+                      </span>
                     )}
                     {upload.status === 'done' && (
                       <span className="text-sm text-green-600">✓ Done</span>
@@ -218,11 +239,18 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
                   </div>
                 </div>
                 {upload.status === 'uploading' && (
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-indigo-600 h-2 rounded-full transition-all"
-                      style={{ width: `${upload.progress}%` }}
-                    />
+                  <div className="mt-2">
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${upload.progress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1">
+                      {upload.stage === 'preparing' && 'Getting upload URL...'}
+                      {upload.stage === 'uploading' && `Uploading file... ${upload.progress}%`}
+                      {upload.stage === 'finalizing' && 'Marking video as uploaded...'}
+                    </p>
                   </div>
                 )}
               </div>

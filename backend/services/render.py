@@ -30,75 +30,137 @@ def render_final_video(
         sponsor_name: Optional sponsor name for overlays
         generated_ads: Optional list of generated Veo ads with video_path and timestamp_ms
     """
+    print(f"[Render] ========== STARTING FINAL VIDEO RENDER ==========")
+    print(f"[Render] Source videos: {len(video_paths)}")
+    print(f"[Render] Output path: {output_path}")
+    print(f"[Render] Music: {'Yes' if music_path else 'No'}")
+    print(f"[Render] Sponsor: {sponsor_name or 'None'}")
+    print(f"[Render] Ads: {len(generated_ads) if generated_ads else 0}")
+
     # Create video ID to path mapping
     video_map = {v["id"]: v for v in video_paths}
 
     segments = timeline.get("segments", [])
     if not segments:
+        print(f"[Render] ERROR: No segments in timeline")
         raise ValueError("No segments in timeline")
+
+    print(f"[Render] Timeline has {len(segments)} segments")
 
     # Create temp directory for intermediate files
     with tempfile.TemporaryDirectory() as tmpdir:
+        print(f"[Render] Working in temp directory: {tmpdir}")
+
         # Extract and prepare each segment
+        print(f"[Render] ---------- EXTRACTING SEGMENTS ----------")
         segment_files = []
+
+        # Log which videos are being used
+        video_usage = {}
+        for seg in segments:
+            vid = seg["video_id"]
+            video_usage[vid] = video_usage.get(vid, 0) + 1
+        print(f"[Render] Video usage in timeline: {video_usage}")
+
         for i, segment in enumerate(segments):
             video = video_map.get(segment["video_id"])
             if not video:
+                print(f"[Render] WARNING: Video not found for segment {i}: {segment['video_id']}")
+                print(f"[Render] Available videos: {list(video_map.keys())}")
                 continue
 
             # Calculate times with sync offset
-            start_sec = (segment["start_ms"] - video.get("sync_offset_ms", 0)) / 1000
+            sync_offset = video.get("sync_offset_ms", 0)
+            start_sec = (segment["start_ms"] - sync_offset) / 1000
             duration_sec = (segment["end_ms"] - segment["start_ms"]) / 1000
 
+            # Clamp start to valid range
             if start_sec < 0:
+                # Adjust duration to compensate for clamping
+                duration_sec = duration_sec + start_sec  # start_sec is negative, so this reduces duration
                 start_sec = 0
 
+            # Skip segments that are too short (< 0.5 seconds)
+            if duration_sec < 0.5:
+                print(f"[Render] WARNING: Skipping segment {i} - duration too short ({duration_sec:.2f}s)")
+                continue
+
             segment_path = os.path.join(tmpdir, f"segment_{i:04d}.mp4")
+
+            print(f"[Render] Extracting segment {i + 1}/{len(segments)} from video '{segment['video_id']}': {start_sec:.2f}s for {duration_sec:.2f}s (sync_offset={sync_offset}ms)")
 
             # Extract segment with FFmpeg
             try:
                 (
                     ffmpeg
                     .input(video["path"], ss=start_sec, t=duration_sec)
-                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18)
+                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18,
+                            pix_fmt="yuv420p", movflags="+faststart")
                     .overwrite_output()
                     .run(quiet=True)
                 )
                 segment_files.append(segment_path)
+                # Verify segment was created and has content
+                seg_size = os.path.getsize(segment_path)
+                print(f"[Render] Segment {i + 1} extracted successfully ({seg_size / 1024:.1f} KB)")
             except ffmpeg.Error as e:
-                print(f"Error extracting segment {i}: {e}")
+                print(f"[Render] ERROR extracting segment {i}: {e}")
+                if hasattr(e, 'stderr') and e.stderr:
+                    print(f"[Render] FFmpeg stderr: {e.stderr.decode()[:500]}")
                 continue
 
         if not segment_files:
+            print(f"[Render] ERROR: No segments extracted")
             raise ValueError("No segments extracted")
+
+        print(f"[Render] Total segments extracted: {len(segment_files)}")
 
         # Apply zooms to segments
         zooms = timeline.get("zooms", [])
-        segment_files = apply_zooms_to_segments(segment_files, segments, zooms, tmpdir)
+        if zooms:
+            print(f"[Render] ---------- APPLYING ZOOMS ----------")
+            print(f"[Render] Applying {len(zooms)} zoom effects...")
+            segment_files = apply_zooms_to_segments(segment_files, segments, zooms, tmpdir)
+        else:
+            print(f"[Render] No zoom effects to apply")
 
         # Concatenate segments with crossfades
+        print(f"[Render] ---------- CONCATENATING SEGMENTS ----------")
         concat_path = os.path.join(tmpdir, "concat.mp4")
+        print(f"[Render] Concatenating {len(segment_files)} segments with crossfades...")
         concatenate_with_crossfades(segment_files, concat_path)
+        print(f"[Render] Concatenation complete")
 
         # Insert generated ads if provided
         if generated_ads:
+            print(f"[Render] ---------- INSERTING ADS ----------")
+            print(f"[Render] Inserting {len(generated_ads)} ads into video...")
             ads_inserted_path = os.path.join(tmpdir, "with_ads.mp4")
             insert_ads_into_video(concat_path, generated_ads, ads_inserted_path, tmpdir)
             concat_path = ads_inserted_path
+            print(f"[Render] Ads inserted successfully")
 
         # Add sponsor overlays if provided
         if sponsor_name:
+            print(f"[Render] ---------- ADDING SPONSOR OVERLAYS ----------")
+            print(f"[Render] Adding sponsor overlays for: {sponsor_name}")
             overlay_path = os.path.join(tmpdir, "overlay.mp4")
             add_sponsor_overlays(concat_path, overlay_path, sponsor_name, timeline)
             concat_path = overlay_path
+            print(f"[Render] Sponsor overlays added")
 
         # Mix music if provided
         if music_path:
+            print(f"[Render] ---------- MIXING MUSIC ----------")
+            print(f"[Render] Mixing music with event type profile: {event_type}")
             mix_path = os.path.join(tmpdir, "mixed.mp4")
             mix_audio(concat_path, music_path, mix_path, event_type)
             concat_path = mix_path
+            print(f"[Render] Music mix complete")
 
         # Final copy to output
+        print(f"[Render] ---------- FINALIZING OUTPUT ----------")
+        print(f"[Render] Copying final video to: {output_path}")
         (
             ffmpeg
             .input(concat_path)
@@ -107,19 +169,25 @@ def render_final_video(
             .run(quiet=True)
         )
 
+        output_size = os.path.getsize(output_path) / (1024 * 1024)
+        print(f"[Render] Final video size: {output_size:.1f} MB")
+        print(f"[Render] ========== RENDER COMPLETE ==========")
+
 
 def concatenate_with_crossfades(
     segment_files: list[str],
     output_path: str,
     crossfade_duration: float = 0.5,
 ) -> None:
-    """Concatenate video segments with crossfade transitions.
+    """Concatenate video segments using concat demuxer (simple, reliable).
 
     Args:
         segment_files: List of paths to segment files
         output_path: Path to write concatenated output
-        crossfade_duration: Duration of crossfade in seconds
+        crossfade_duration: Duration of crossfade in seconds (currently unused - using simple concat)
     """
+    import tempfile
+
     if len(segment_files) == 1:
         # No concatenation needed
         (
@@ -131,40 +199,29 @@ def concatenate_with_crossfades(
         )
         return
 
-    # Build filter complex for xfade
-    # For many segments, we need to chain xfades
-    inputs = [ffmpeg.input(f) for f in segment_files]
+    # Use concat demuxer - simpler and more reliable than xfade filter
+    # Create a temporary file listing all segments
+    concat_list_path = output_path + ".txt"
+    with open(concat_list_path, "w") as f:
+        for segment in segment_files:
+            f.write(f"file '{segment}'\n")
 
-    # Get durations for offset calculation
-    durations = []
-    for f in segment_files:
-        probe = ffmpeg.probe(f)
-        duration = float(probe["format"]["duration"])
-        durations.append(duration)
-
-    # Build xfade chain
-    video = inputs[0].video
-    audio = inputs[0].audio
-    running_duration = durations[0]
-
-    for i in range(1, len(inputs)):
-        offset = running_duration - crossfade_duration
-        if offset < 0:
-            offset = 0
-
-        video = ffmpeg.filter([video, inputs[i].video], "xfade",
-                              transition="fade", duration=crossfade_duration, offset=offset)
-        audio = ffmpeg.filter([audio, inputs[i].audio], "acrossfade", d=crossfade_duration)
-
-        running_duration = running_duration - crossfade_duration + durations[i]
-
-    # Output
-    (
-        ffmpeg
-        .output(video, audio, output_path, vcodec="libx264", acodec="aac", crf=18)
-        .overwrite_output()
-        .run(quiet=True)
-    )
+    try:
+        (
+            ffmpeg
+            .input(concat_list_path, format="concat", safe=0)
+            .output(output_path, vcodec="libx264", acodec="aac", crf=18,
+                    pix_fmt="yuv420p", movflags="+faststart")
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    except ffmpeg.Error as e:
+        print(f"[Render] FFmpeg stderr: {e.stderr.decode() if e.stderr else 'no stderr'}")
+        raise
+    finally:
+        # Clean up temp file
+        if os.path.exists(concat_list_path):
+            os.remove(concat_list_path)
 
 
 def apply_zooms_to_segments(
@@ -273,7 +330,8 @@ def apply_ken_burns_zoom(
                 y="ih/2-(ih/zoom/2)",
                 s="1920x1080",
                 fps=fps)
-        .output(output_path, vcodec="libx264", acodec="aac", crf=18)
+        .output(output_path, vcodec="libx264", acodec="aac", crf=18,
+                pix_fmt="yuv420p", movflags="+faststart")
         .overwrite_output()
         .run(quiet=True)
     )
@@ -334,7 +392,8 @@ def add_sponsor_overlays(
     (
         ffmpeg
         .output(video, ffmpeg.input(input_path).audio, output_path,
-                vcodec="libx264", acodec="copy", crf=18)
+                vcodec="libx264", acodec="aac", crf=18,
+                pix_fmt="yuv420p", movflags="+faststart")
         .overwrite_output()
         .run(quiet=True)
     )
@@ -381,7 +440,8 @@ def mix_audio(
 
     (
         ffmpeg
-        .output(video.video, mixed, output_path, vcodec="copy", acodec="aac")
+        .output(video.video, mixed, output_path, vcodec="libx264", acodec="aac", crf=18,
+                pix_fmt="yuv420p", movflags="+faststart")
         .overwrite_output()
         .run(quiet=True)
     )
@@ -403,35 +463,54 @@ def render_highlight_reel(
         music_path: Optional music file
         vibe: Vibe for styling
     """
+    print(f"[Render:Reel] ========== RENDERING HIGHLIGHT REEL ==========")
+    print(f"[Render:Reel] Title: '{title}'")
+    print(f"[Render:Reel] Vibe: {vibe}")
+    print(f"[Render:Reel] Clips: {len(clips)}")
+    print(f"[Render:Reel] Music: {'Yes' if music_path else 'No'}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Generate title card
+        print(f"[Render:Reel] Generating title card...")
         title_path = os.path.join(tmpdir, "title.mp4")
         generate_title_card(title, vibe, title_path)
+        print(f"[Render:Reel] Title card generated")
 
         # Extract clips
+        print(f"[Render:Reel] ---------- EXTRACTING CLIPS ----------")
         clip_files = [title_path]
         for i, clip in enumerate(clips):
             clip_path = os.path.join(tmpdir, f"clip_{i:04d}.mp4")
             start = clip["start"]
             duration = clip["end"] - clip["start"]
 
+            print(f"[Render:Reel] Extracting clip {i + 1}/{len(clips)}: {start:.1f}s - {clip['end']:.1f}s ({duration:.1f}s)")
             (
                 ffmpeg
                 .input(clip["path"], ss=start, t=duration)
-                .output(clip_path, vcodec="libx264", acodec="aac", crf=18)
+                .output(clip_path, vcodec="libx264", acodec="aac", crf=18,
+                        pix_fmt="yuv420p", movflags="+faststart")
                 .overwrite_output()
                 .run(quiet=True)
             )
             clip_files.append(clip_path)
+            print(f"[Render:Reel] Clip {i + 1} extracted")
 
         # Concatenate with crossfades
+        print(f"[Render:Reel] ---------- CONCATENATING CLIPS ----------")
         concat_path = os.path.join(tmpdir, "concat.mp4")
+        print(f"[Render:Reel] Concatenating {len(clip_files)} clips (including title)...")
         concatenate_with_crossfades(clip_files, concat_path, crossfade_duration=0.5)
+        print(f"[Render:Reel] Concatenation complete")
 
         # Add music if provided
         if music_path:
+            print(f"[Render:Reel] ---------- ADDING MUSIC ----------")
+            print(f"[Render:Reel] Mixing music...")
             mix_audio(concat_path, music_path, output_path, "sports")
+            print(f"[Render:Reel] Music added")
         else:
+            print(f"[Render:Reel] Copying to output (no music)...")
             (
                 ffmpeg
                 .input(concat_path)
@@ -439,6 +518,10 @@ def render_highlight_reel(
                 .overwrite_output()
                 .run(quiet=True)
             )
+
+        output_size = os.path.getsize(output_path) / (1024 * 1024)
+        print(f"[Render:Reel] Output size: {output_size:.1f} MB")
+        print(f"[Render:Reel] ========== HIGHLIGHT REEL COMPLETE ==========")
 
 
 def generate_title_card(
@@ -537,7 +620,8 @@ def insert_ads_into_video(
                 (
                     ffmpeg
                     .input(video_path, ss=current_pos, t=segment_duration)
-                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18)
+                    .output(segment_path, vcodec="libx264", acodec="aac", crf=18,
+                            pix_fmt="yuv420p", movflags="+faststart")
                     .overwrite_output()
                     .run(quiet=True)
                 )
@@ -571,7 +655,8 @@ def insert_ads_into_video(
             (
                 ffmpeg
                 .input(video_path, ss=current_pos)
-                .output(final_segment_path, vcodec="libx264", acodec="aac", crf=18)
+                .output(final_segment_path, vcodec="libx264", acodec="aac", crf=18,
+                        pix_fmt="yuv420p", movflags="+faststart")
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -615,7 +700,8 @@ def normalize_ad_video(
             .filter("scale", w=target_width, h=target_height, force_original_aspect_ratio="decrease")
             .filter("pad", w=target_width, h=target_height, x="(ow-iw)/2", y="(oh-ih)/2")
             .filter("fps", fps=target_fps)
-            .output(output_path, vcodec="libx264", acodec="aac", crf=18, ar=44100)
+            .output(output_path, vcodec="libx264", acodec="aac", crf=18, ar=44100,
+                    pix_fmt="yuv420p", movflags="+faststart")
             .overwrite_output()
             .run(quiet=True)
         )
@@ -672,7 +758,8 @@ def add_product_callout(
                     box=1,
                     boxcolor="black@0.5",
                     boxborderw=10)
-            .output(output_path, vcodec="libx264", acodec="copy", crf=18)
+            .output(output_path, vcodec="libx264", acodec="aac", crf=18,
+                    pix_fmt="yuv420p", movflags="+faststart")
             .overwrite_output()
             .run(quiet=True)
         )

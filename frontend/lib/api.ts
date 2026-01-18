@@ -14,7 +14,11 @@ async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
+  const method = options.method || 'GET'
+  console.log(`[API] ${method} ${endpoint}`)
+
   const token = await getAuthToken()
+  console.log(`[API] Auth token: ${token ? 'present' : 'none'}`)
 
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -22,17 +26,24 @@ async function apiRequest<T>(
     ...options.headers,
   }
 
+  const startTime = performance.now()
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers,
   })
+  const duration = Math.round(performance.now() - startTime)
+
+  console.log(`[API] Response: ${response.status} ${response.statusText} (${duration}ms)`)
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }))
+    console.error(`[API] ERROR: ${error.detail || 'Request failed'}`)
     throw new Error(error.detail || 'Request failed')
   }
 
-  return response.json()
+  const data = await response.json()
+  console.log(`[API] Success:`, data)
+  return data
 }
 
 // Events API
@@ -257,48 +268,117 @@ export async function getReel(eventId: string, reelId: string): Promise<CustomRe
   return apiRequest(`/api/events/${eventId}/reels/${reelId}`)
 }
 
-// File upload helper
-export async function uploadFileToS3(uploadUrl: string, file: File): Promise<void> {
-  const response = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: {
-      'Content-Type': file.type,
-    },
-  })
+// File upload helper with progress tracking
+export async function uploadFileToS3(
+  uploadUrl: string,
+  file: File,
+  onProgress?: (progress: number) => void
+): Promise<void> {
+  console.log(`[S3 Upload] Starting upload to S3`)
+  console.log(`[S3 Upload] File: ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)`)
+  console.log(`[S3 Upload] Type: ${file.type}`)
 
-  if (!response.ok) {
-    throw new Error('Failed to upload file')
-  }
+  const startTime = performance.now()
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && onProgress) {
+        const progress = Math.round((event.loaded / event.total) * 100)
+        onProgress(progress)
+        if (progress % 25 === 0) {
+          console.log(`[S3 Upload] Progress: ${progress}%`)
+        }
+      }
+    })
+
+    xhr.addEventListener('load', () => {
+      const duration = Math.round((performance.now() - startTime) / 1000)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        console.log(`[S3 Upload] Upload complete (${duration}s)`)
+        resolve()
+      } else {
+        console.error(`[S3 Upload] ERROR: Upload failed with status ${xhr.status}`)
+        reject(new Error(`Upload failed with status ${xhr.status}`))
+      }
+    })
+
+    xhr.addEventListener('error', () => {
+      console.error(`[S3 Upload] ERROR: Network error`)
+      reject(new Error('Upload failed - network error'))
+    })
+
+    xhr.addEventListener('abort', () => {
+      console.warn(`[S3 Upload] Upload cancelled`)
+      reject(new Error('Upload was cancelled'))
+    })
+
+    xhr.open('PUT', uploadUrl)
+    xhr.setRequestHeader('Content-Type', file.type)
+    xhr.send(file)
+  })
 }
 
-// Combined upload flow
+// Combined upload flow with progress callback
 export async function uploadVideo(
   eventId: string,
   file: File,
-  angleType: string
+  angleType: string,
+  onProgress?: (stage: 'preparing' | 'uploading' | 'finalizing', progress: number) => void
 ): Promise<{ videoId: string }> {
-  // Get presigned URL
+  console.log(`[Video Upload] ========== STARTING VIDEO UPLOAD ==========`)
+  console.log(`[Video Upload] Event ID: ${eventId}`)
+  console.log(`[Video Upload] File: ${file.name}`)
+  console.log(`[Video Upload] Size: ${(file.size / (1024 * 1024)).toFixed(1)} MB`)
+  console.log(`[Video Upload] Angle type: ${angleType}`)
+
+  // Stage 1: Get presigned URL (5%)
+  console.log(`[Video Upload] Stage 1: Getting presigned URL...`)
+  onProgress?.('preparing', 5)
   const { video_id, upload_url } = await getVideoUploadUrl(
     eventId,
     file.name,
     angleType,
     file.type
   )
+  console.log(`[Video Upload] Video ID assigned: ${video_id}`)
+  console.log(`[Video Upload] Presigned URL obtained`)
 
-  // Upload to S3
-  await uploadFileToS3(upload_url, file)
+  // Stage 2: Upload to S3 (5-95%)
+  console.log(`[Video Upload] Stage 2: Uploading to S3...`)
+  onProgress?.('uploading', 5)
+  await uploadFileToS3(upload_url, file, (uploadProgress) => {
+    // Map 0-100% upload progress to 5-95% overall progress
+    const overallProgress = 5 + Math.round(uploadProgress * 0.9)
+    onProgress?.('uploading', overallProgress)
+  })
+  console.log(`[Video Upload] S3 upload complete`)
 
-  // Mark as uploaded
+  // Stage 3: Mark as uploaded (95-100%)
+  console.log(`[Video Upload] Stage 3: Marking video as uploaded...`)
+  onProgress?.('finalizing', 95)
   await markVideoUploaded(eventId, video_id)
+  onProgress?.('finalizing', 100)
+  console.log(`[Video Upload] Video marked as uploaded`)
+  console.log(`[Video Upload] ========== VIDEO UPLOAD COMPLETE ==========`)
 
   return { videoId: video_id }
 }
 
 export async function uploadMusic(eventId: string, file: File): Promise<void> {
+  console.log(`[Music Upload] ========== STARTING MUSIC UPLOAD ==========`)
+  console.log(`[Music Upload] Event ID: ${eventId}`)
+  console.log(`[Music Upload] File: ${file.name}`)
+  console.log(`[Music Upload] Size: ${(file.size / (1024 * 1024)).toFixed(1)} MB`)
+
   // Get presigned URL
+  console.log(`[Music Upload] Getting presigned URL...`)
   const { upload_url } = await getMusicUploadUrl(eventId, file.name, file.type)
+  console.log(`[Music Upload] Presigned URL obtained`)
 
   // Upload to S3
+  console.log(`[Music Upload] Uploading to S3...`)
   await uploadFileToS3(upload_url, file)
+  console.log(`[Music Upload] ========== MUSIC UPLOAD COMPLETE ==========`)
 }

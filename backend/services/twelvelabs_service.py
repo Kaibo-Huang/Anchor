@@ -12,11 +12,12 @@ from config import get_settings
 def get_twelvelabs_client() -> TwelveLabs:
     """Get TwelveLabs client singleton."""
     settings = get_settings()
+    print(f"[TwelveLabs] Initializing TwelveLabs client...")
     return TwelveLabs(api_key=settings.twelvelabs_api_key)
 
 
 def create_index(index_name: str) -> str:
-    """Create a TwelveLabs index for video analysis.
+    """Create a TwelveLabs index for video analysis, or return existing one.
 
     Args:
         index_name: Unique name for the index (e.g., "event_{event_id}")
@@ -24,26 +25,41 @@ def create_index(index_name: str) -> str:
     Returns:
         Index ID
     """
+    print(f"[TwelveLabs] Creating index: {index_name}")
     client = get_twelvelabs_client()
 
     # Import from top-level twelvelabs module
     from twelvelabs import IndexesCreateRequestModelsItem
+    from twelvelabs.core.api_error import ApiError
 
-    index = client.indexes.create(
-        index_name=index_name,
-        models=[
-            IndexesCreateRequestModelsItem(
-                model_name="marengo2.7",
-                model_options=["visual", "audio"],
-            ),
-            IndexesCreateRequestModelsItem(
-                model_name="pegasus1.2",
-                model_options=["visual", "audio"],
-            ),
-        ],
-    )
-
-    return index.id
+    print(f"[TwelveLabs] Configuring models: marengo2.7 (visual+audio), pegasus1.2 (visual+audio)")
+    try:
+        index = client.indexes.create(
+            index_name=index_name,
+            models=[
+                IndexesCreateRequestModelsItem(
+                    model_name="marengo2.7",
+                    model_options=["visual", "audio"],
+                ),
+                IndexesCreateRequestModelsItem(
+                    model_name="pegasus1.2",
+                    model_options=["visual", "audio"],
+                ),
+            ],
+        )
+        print(f"[TwelveLabs] Index created successfully: {index.id}")
+        return index.id
+    except ApiError as e:
+        if e.status_code == 409 and "already_exists" in str(e.body):
+            # Index already exists, find and return it
+            print(f"[TwelveLabs] Index already exists, retrieving...")
+            indexes = client.indexes.list()
+            for idx in indexes:
+                if idx.index_name == index_name:
+                    print(f"[TwelveLabs] Found existing index: {idx.id}")
+                    return idx.id
+            raise ValueError(f"Index {index_name} exists but could not be found")
+        raise
 
 
 def index_video(index_id: str, video_url: str, wait: bool = True) -> Any:
@@ -57,15 +73,26 @@ def index_video(index_id: str, video_url: str, wait: bool = True) -> Any:
     Returns:
         Task object with indexing status
     """
+    print(f"[TwelveLabs] Indexing video in index: {index_id}")
+    print(f"[TwelveLabs] Video URL: {video_url[:80]}...")
     client = get_twelvelabs_client()
 
+    print(f"[TwelveLabs] Creating indexing task...")
     task = client.tasks.create(
         index_id=index_id,
         video_url=video_url,
     )
+    task_id = task.id if hasattr(task, 'id') else None
+    print(f"[TwelveLabs] Task created: {task_id}")
 
-    if wait:
-        task.wait_for_done(sleep_interval=5)
+    if wait and task_id:
+        print(f"[TwelveLabs] Waiting for indexing to complete (polling every 5s)...")
+        # Use client.tasks.wait_for_done() instead of task.wait_for_done()
+        completed_task = client.tasks.wait_for_done(task_id=task_id, sleep_interval=5)
+        print(f"[TwelveLabs] Indexing complete! Video ID: {completed_task.video_id if hasattr(completed_task, 'video_id') else 'N/A'}")
+        return completed_task
+    else:
+        print(f"[TwelveLabs] Task submitted (not waiting for completion)")
 
     return task
 
@@ -87,11 +114,14 @@ def search_videos(
     Returns:
         List of search results with video_id, start, end, confidence
     """
+    print(f"[TwelveLabs] Searching videos in index: {index_id}")
+    print(f"[TwelveLabs] Query: '{query}'")
     client = get_twelvelabs_client()
 
     if search_options is None:
         search_options = ["visual", "audio"]
 
+    print(f"[TwelveLabs] Search options: {search_options}, limit: {limit}")
     results = client.search.query(
         index_id=index_id,
         query_text=query,
@@ -110,6 +140,10 @@ def search_videos(
             "metadata": clip.metadata if hasattr(clip, "metadata") else {},
         })
 
+    print(f"[TwelveLabs] Search returned {len(moments)} moments")
+    if moments:
+        print(f"[TwelveLabs] Top result: {moments[0]['start']:.1f}s-{moments[0]['end']:.1f}s (confidence: {moments[0]['confidence']:.2f})")
+
     return moments
 
 
@@ -122,23 +156,39 @@ def create_video_embeddings(video_url: str) -> list[dict]:
     Returns:
         List of segment embeddings with start_time, end_time, embedding vector
     """
+    print(f"[TwelveLabs] Creating video embeddings...")
+    print(f"[TwelveLabs] Video URL: {video_url[:80]}...")
     client = get_twelvelabs_client()
 
-    task = client.embed.task.create(
+    print(f"[TwelveLabs] Using model: Marengo-retrieval-2.7")
+    task = client.embed.tasks.create(
         model_name="Marengo-retrieval-2.7",
         video_url=video_url,
     )
-    task.wait_for_done()
+    task_id = task.id if hasattr(task, 'id') else None
+    print(f"[TwelveLabs] Embedding task created: {task_id}, waiting for completion...")
+
+    # Use client.embed.tasks.wait_for_done() instead of task.wait_for_done()
+    if task_id:
+        completed_task = client.embed.tasks.wait_for_done(task_id=task_id, sleep_interval=5)
+    else:
+        completed_task = task
+    print(f"[TwelveLabs] Embedding task complete")
 
     # Extract embeddings from completed task
     embeddings = []
-    if hasattr(task, "video_embeddings") and task.video_embeddings:
-        for segment in task.video_embeddings:
+    if hasattr(completed_task, "video_embeddings") and completed_task.video_embeddings:
+        for segment in completed_task.video_embeddings:
             embeddings.append({
                 "start_time": segment.start_offset_sec if hasattr(segment, "start_offset_sec") else 0,
                 "end_time": segment.end_offset_sec if hasattr(segment, "end_offset_sec") else 0,
                 "embedding": segment.embedding if hasattr(segment, "embedding") else [],
             })
+
+    print(f"[TwelveLabs] Extracted {len(embeddings)} embedding segments")
+    if embeddings:
+        embed_dim = len(embeddings[0].get("embedding", [])) if embeddings[0].get("embedding") else 0
+        print(f"[TwelveLabs] Embedding dimension: {embed_dim}")
 
     return embeddings
 
@@ -152,6 +202,7 @@ def create_text_embedding(text: str) -> list[float]:
     Returns:
         Embedding vector (1024 dimensions)
     """
+    print(f"[TwelveLabs] Creating text embedding for: '{text[:50]}...'")
     client = get_twelvelabs_client()
 
     result = client.embed.create(
@@ -159,7 +210,10 @@ def create_text_embedding(text: str) -> list[float]:
         text=text,
     )
 
-    return result.embedding if hasattr(result, "embedding") else []
+    embedding = result.embedding if hasattr(result, "embedding") else []
+    print(f"[TwelveLabs] Text embedding created (dim: {len(embedding)})")
+
+    return embedding
 
 
 # Pre-defined vibe anchors for identity matching
@@ -179,10 +233,13 @@ def get_vibe_embedding(vibe: Literal["high_energy", "emotional", "calm"]) -> lis
     Returns:
         Embedding vector for the vibe
     """
+    print(f"[TwelveLabs] Getting vibe embedding for: {vibe}")
     description = VIBE_DESCRIPTIONS.get(vibe)
     if not description:
+        print(f"[TwelveLabs] ERROR: Unknown vibe: {vibe}")
         raise ValueError(f"Unknown vibe: {vibe}")
 
+    print(f"[TwelveLabs] Vibe description: '{description}'")
     return create_text_embedding(description)
 
 

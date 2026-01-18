@@ -139,12 +139,12 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
                 <div className="w-full h-20 bg-gray-100 rounded mb-2" />
               )}
               <p className="text-sm font-medium truncate">{bp.product?.title}</p>
-              <p className="text-xs text-gray-500">{bp.store?.shop_name || bp.store?.shop_domain}</p>
+              <p className="text-xs text-gray-700">{bp.store?.shop_name || bp.store?.shop_domain}</p>
             </div>
           ))}
         </div>
 
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-600">
           These products will be featured in AI-generated video ad breaks.
         </p>
       </div>
@@ -198,16 +198,16 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
                     />
                   )}
                   <p className="text-sm font-medium truncate">{product.title}</p>
-                  <p className="text-sm text-gray-500">${product.price}</p>
+                  <p className="text-sm text-gray-700">${product.price}</p>
                 </div>
               ))}
             </div>
-            <p className="text-sm text-gray-500 mt-3">
+            <p className="text-sm text-gray-600 mt-3">
               Products will be automatically featured in video ad breaks.
             </p>
           </div>
         ) : (
-          <p className="text-gray-500 text-sm">No active products found in your store.</p>
+          <p className="text-gray-700 text-sm">No active products found in your store.</p>
         )}
       </div>
     )
@@ -236,7 +236,7 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
           <div className="w-full border-t border-gray-300" />
         </div>
         <div className="relative flex justify-center text-sm">
-          <span className="px-2 bg-white text-gray-500">or connect your own store</span>
+          <span className="px-2 bg-white text-gray-600">or connect your own store</span>
         </div>
       </div>
 
@@ -271,7 +271,7 @@ export default function ShopifyConnect({ eventId, connectedUrl }: ShopifyConnect
         )}
       </div>
 
-      <p className="text-xs text-gray-400 text-center">
+      <p className="text-xs text-gray-600 text-center">
         Your video will still be generated without ads if you skip this step.
       </p>
     </div>
