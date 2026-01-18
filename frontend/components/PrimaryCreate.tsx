@@ -2,7 +2,6 @@ import React, {useEffect, useState} from 'react'
 import Button from '@mui/material/Button';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import {styled} from "@mui/system";
-import Image from 'next/image';
 import {IconButton, TextField, Typography} from "@mui/material";
 import SendIcon from '@mui/icons-material/Send';
 
@@ -23,17 +22,17 @@ const VisuallyHiddenInput = styled('input')({
 });
 
 const infoCaptions = [
-    <Typography variant="h2" gutterBottom>Create a Video of Your <br/> Most Important Moments</Typography>,
-    <Typography variant="h2" gutterBottom>Give Some Context</Typography>,
-    <Typography variant="h2" gutterBottom>Add Some Music</Typography>,
-    <Typography variant="h2" gutterBottom>Include crowd reactions</Typography>,
+    <Typography key="caption-0" variant="h2" gutterBottom>Create a Video of Your <br/> Most Important Moments</Typography>,
+    <Typography key="caption-1" variant="h2" gutterBottom>Give Some Context</Typography>,
+    <Typography key="caption-2" variant="h2" gutterBottom>Add Some Music</Typography>,
+    <Typography key="caption-3" variant="h2" gutterBottom>Include crowd reactions</Typography>,
 ]
 
 const infoContent = [
-    <Typography variant="h4">Upload videos from your computer to get <br/> started.</Typography>,
-    <Typography variant="h4">Explain what these videos are about. <br/> Talk about what is in them.</Typography>,
-    <Typography variant="h4">Pick what kind of energy you want to <br/> express yourself with.</Typography>,
-    <Typography variant="h4">Include crowd reactions</Typography>,
+    <Typography key="content-0" variant="h4">Upload videos from your computer to get <br/> started.</Typography>,
+    <Typography key="content-1" variant="h4">Explain what these videos are about. <br/> Talk about what is in them.</Typography>,
+    <Typography key="content-2" variant="h4">Pick what kind of energy you want to <br/> express yourself with.</Typography>,
+    <Typography key="content-3" variant="h4">Include crowd reactions</Typography>,
 ]
 
 export default function PrimaryCreate() {
@@ -95,9 +94,12 @@ export default function PrimaryCreate() {
                 setAnimationComplete(true);
             }, 650); // Wait for slide-right + section-fade-out to complete
             return () => clearTimeout(timeout);
-        } else {
-            setAnimationComplete(false);
         }
+
+        const timeout = setTimeout(() => {
+            setAnimationComplete(false);
+        }, 0);
+        return () => clearTimeout(timeout);
     }, [step]);
 
     // Handle step 4 animation completion - remove elements after slide up
@@ -107,20 +109,28 @@ export default function PrimaryCreate() {
                 setStep4AnimationComplete(true);
             }, 800); // Match the slide-up-off-screen animation duration
             return () => clearTimeout(timeout);
-        } else {
-            setStep4AnimationComplete(false);
         }
+
+        const timeout = setTimeout(() => {
+            setStep4AnimationComplete(false);
+        }, 0);
+        return () => clearTimeout(timeout);
     }, [step]);
 
     // Handle step changes with fade-out-then-fade-in
     useEffect(() => {
         if (step !== displayedStep) {
-            setIsFadingOut(true);
-            const timeout = setTimeout(() => {
+            const timeout1 = setTimeout(() => {
+                setIsFadingOut(true);
+            }, 0);
+            const timeout2 = setTimeout(() => {
                 setDisplayedStep(step);
                 setIsFadingOut(false);
             }, 400); // Match fade-out duration
-            return () => clearTimeout(timeout);
+            return () => {
+                clearTimeout(timeout1);
+                clearTimeout(timeout2);
+            };
         }
     }, [step, displayedStep]);
 
@@ -188,7 +198,7 @@ export default function PrimaryCreate() {
                                     variant="body1"
                                     sx={{color: '#CFD0D1'}}
                                 >
-                                    Describe your vision and we'll help bring it to life
+                                    Describe your vision and we&apos;ll help bring it to life
                                 </Typography>
                             </div>
 
@@ -305,7 +315,7 @@ export default function PrimaryCreate() {
                                 transition: 'opacity 0.5s ease-in-out'
                             }}
                         >
-                            Let's Get Started
+                            Let&apos;s Get Started
                         </Typography>
                         <Button
                             component="label"
@@ -325,7 +335,7 @@ export default function PrimaryCreate() {
                             <VisuallyHiddenInput
                                 type="file"
                                 accept="video/*"
-                                onChange={(event: { target: { files: any; }; }) => {
+                                onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
                                     console.log(event.target.files)
                                     setStep(1);
                                 }}
@@ -430,7 +440,7 @@ export default function PrimaryCreate() {
                             <VisuallyHiddenInput
                                 type="file"
                                 accept="audio/*"
-                                onChange={(event: { target: { files: any; }; }) => {
+                                onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
                                     console.log(event.target.files)
                                     setStep(3);
                                 }}
