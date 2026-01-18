@@ -161,15 +161,15 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
       {/* Existing Videos */}
       {existingVideos.length > 0 && (
         <div>
-          <h3 className="font-medium mb-3">Uploaded Videos ({existingVideos.length})</h3>
+          <h3 className="font-semibold text-[#383A42] mb-3">Uploaded Videos ({existingVideos.length})</h3>
           <div className="space-y-2">
             {existingVideos.map((video) => (
               <div key={video.id} className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
                 <div className="flex items-center gap-3">
                   <span className="text-green-500">✓</span>
-                  <span className="text-sm">{video.angle_type}</span>
+                  <span className="text-sm font-semibold text-[#383A42]">{video.angle_type}</span>
                 </div>
-                <span className="text-xs text-gray-700">{video.status}</span>
+                <span className="text-xs font-medium text-[#383A42]">{video.status}</span>
               </div>
             ))}
           </div>
@@ -180,7 +180,7 @@ export default function VideoUpload({ eventId, existingVideos }: VideoUploadProp
       {uploads.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-medium">New Videos ({uploads.length})</h3>
+            <h3 className="font-semibold text-[#383A42]">New Videos ({uploads.length})</h3>
             {pendingUploads.length > 0 && (
               <button
                 onClick={uploadAll}

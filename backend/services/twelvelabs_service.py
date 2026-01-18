@@ -230,6 +230,9 @@ VIBE_DESCRIPTIONS = {
     "calm": "peaceful, relaxed, slow motion, gentle movement, serene",
 }
 
+# Cache for vibe embeddings - these never change, so compute once and reuse
+_vibe_embedding_cache: dict[str, list[float]] = {}
+
 
 def get_vibe_embedding(vibe: Literal["high_energy", "emotional", "calm"]) -> list[float]:
     """Get pre-computed vibe anchor embedding for identity matching.
@@ -240,14 +243,25 @@ def get_vibe_embedding(vibe: Literal["high_energy", "emotional", "calm"]) -> lis
     Returns:
         Embedding vector for the vibe
     """
-    print(f"[TwelveLabs] Getting vibe embedding for: {vibe}")
+    # Check cache first
+    if vibe in _vibe_embedding_cache:
+        print(f"[TwelveLabs] Using cached vibe embedding for: {vibe}")
+        return _vibe_embedding_cache[vibe]
+
+    print(f"[TwelveLabs] Computing vibe embedding for: {vibe}")
     description = VIBE_DESCRIPTIONS.get(vibe)
     if not description:
         print(f"[TwelveLabs] ERROR: Unknown vibe: {vibe}")
         raise ValueError(f"Unknown vibe: {vibe}")
 
     print(f"[TwelveLabs] Vibe description: '{description}'")
-    return create_text_embedding(description)
+    embedding = create_text_embedding(description)
+
+    # Cache for future use
+    _vibe_embedding_cache[vibe] = embedding
+    print(f"[TwelveLabs] Cached vibe embedding for: {vibe}")
+
+    return embedding
 
 
 def get_video_analysis(index_id: str, video_id: str) -> dict:

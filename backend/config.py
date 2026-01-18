@@ -54,9 +54,9 @@ class VideoConfig:
     """Tunable thresholds for video processing."""
 
     # Ad Detection
-    AD_SCORE_THRESHOLD = 70
-    AD_MIN_SPACING_MS = 45000
-    AD_MAX_PER_4MIN = 1
+    AD_SCORE_THRESHOLD = 40  # Lowered from 70 to generate more ad slots by default
+    AD_MIN_SPACING_MS = 60000  # 1 minute minimum spacing (no more than 1 ad per minute)
+    AD_MAX_PER_4MIN = 4  # Allow up to 4 ads per 4 minutes (1 per minute max)
     AD_WEIGHT_ACTION = 40
     AD_WEIGHT_AUDIO = 25
     AD_PENALTY_KEY_MOMENT = 0.3
@@ -146,3 +146,16 @@ SPEAKER_SCORE_MULTIPLIERS = {
     "podium": 2.0,        # 2x boost for podium angle during speech
     "stage_closeup": 2.0, # 2x boost for stage closeup
 }
+
+# Adaptive crossfade durations by event type (in seconds)
+# Faster events = shorter transitions, calmer events = smoother transitions
+CROSSFADE_DURATION_BY_EVENT = {
+    "sports": 0.3,        # Fast cuts for action
+    "ceremony": 0.7,      # Smooth, professional transitions
+    "performance": 0.5,   # Balanced for music
+    "speech": 0.7,        # Calm, respectful
+    "lecture": 0.8,       # Very smooth for educational content
+}
+
+# Default crossfade duration if event type not found
+DEFAULT_CROSSFADE_DURATION = 0.5

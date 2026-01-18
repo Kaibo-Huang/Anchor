@@ -70,7 +70,18 @@ def update_analysis_progress(supabase, event_id: str, stage: str, stage_progress
     print(f"[Worker:analyze_videos] Progress: {stage} - {message} ({stage_progress*100:.0f}%)")
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+def update_generation_progress(supabase, event_id: str, stage: str, stage_progress: float, message: str):
+    """Update the video generation progress in the database."""
+    progress = {
+        "stage": stage,
+        "stage_progress": min(1.0, max(0.0, stage_progress)),
+        "message": message,
+    }
+    supabase.table("events").update({"generation_progress": progress}).eq("id", event_id).execute()
+    print(f"[Worker:generate_video] Progress: {stage} - {message} ({stage_progress*100:.0f}%)")
+
+
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.analyze_videos_task")
 def analyze_videos_task(self, event_id: str):
     """Analyze all videos in an event using TwelveLabs.
 
@@ -104,18 +115,34 @@ def analyze_videos_task(self, event_id: str):
         # Get event and videos
         print(f"[Worker:analyze_videos] Fetching event and videos from database...")
         _event = supabase.table("events").select("*").eq("id", event_id).single().execute()
-        videos = supabase.table("videos").select("*").eq("event_id", event_id).eq("status", "uploaded").execute()
 
-        print(f"[Worker:analyze_videos] Found {len(videos.data) if videos.data else 0} uploaded videos")
+        # Get both uploaded (need analysis) and already-analyzed videos
+        all_videos = supabase.table("videos").select("*").eq("event_id", event_id).in_("status", ["uploaded", "analyzed"]).execute()
 
-        if not videos.data:
-            print(f"[Worker:analyze_videos] ERROR: No uploaded videos found")
-            raise ValueError("No uploaded videos found")
+        # Separate videos that need analysis from those already done
+        videos_to_analyze = [v for v in all_videos.data if v["status"] == "uploaded"]
+        already_analyzed = [v for v in all_videos.data if v["status"] == "analyzed" and v.get("analysis_data")]
+
+        print(f"[Worker:analyze_videos] Found {len(videos_to_analyze)} videos needing analysis")
+        print(f"[Worker:analyze_videos] Found {len(already_analyzed)} already-analyzed videos (skipping)")
+
+        if not videos_to_analyze and not already_analyzed:
+            print(f"[Worker:analyze_videos] ERROR: No videos found")
+            raise ValueError("No videos found")
+
+        # If all videos are already analyzed, just return success
+        if not videos_to_analyze:
+            print(f"[Worker:analyze_videos] All videos already analyzed, skipping TwelveLabs processing")
+            supabase.table("events").update({"status": "analyzed"}).eq("id", event_id).execute()
+            return {"status": "success", "event_id": event_id, "videos_analyzed": 0, "cached": len(already_analyzed)}
+
+        # For backwards compatibility, use videos_to_analyze as the main list
+        videos = type('obj', (object,), {'data': videos_to_analyze})()
 
         total_videos = len(videos.data)
 
         # Initialize progress
-        update_analysis_progress(supabase, event_id, "initializing", 0.0, 0, total_videos, "Creating TwelveLabs index...")
+        update_analysis_progress(supabase, event_id, "initializing", 0.0, 0, total_videos, "Setting up AI analysis environment...")
 
         # Create TwelveLabs index
         print(f"[Worker:analyze_videos] Creating TwelveLabs index: event_{event_id}")
@@ -128,7 +155,7 @@ def analyze_videos_task(self, event_id: str):
 
         # ============ OPTIMIZATION 1: PARALLEL DOWNLOAD & COMPRESS ============
         print(f"[Worker:analyze_videos] ---------- PARALLEL DOWNLOAD & COMPRESS ----------")
-        update_analysis_progress(supabase, event_id, "downloading", 0.0, 0, total_videos, "Downloading videos in parallel...")
+        update_analysis_progress(supabase, event_id, "downloading", 0.0, 0, total_videos, f"Preparing {total_videos} videos for analysis...")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             def download_and_prepare_video(video_data):
@@ -198,7 +225,7 @@ def analyze_videos_task(self, event_id: str):
             update_analysis_progress(
                 supabase, event_id, "indexing",
                 0.0, 0, total_videos,
-                "Submitting videos to TwelveLabs..."
+                "Starting AI analysis with TwelveLabs Marengo 2.7..."
             )
 
             pending_tasks = []
@@ -258,7 +285,7 @@ def analyze_videos_task(self, event_id: str):
             update_analysis_progress(
                 supabase, event_id, "embeddings",
                 0.0, 0, total_videos,
-                "Generating video embeddings..."
+                "Creating semantic embeddings for intelligent search..."
             )
 
             def generate_embeddings_for_video(ct):
@@ -285,7 +312,7 @@ def analyze_videos_task(self, event_id: str):
             update_analysis_progress(
                 supabase, event_id, "saving",
                 0.9, total_videos, total_videos,
-                "Saving analysis results..."
+                "Finalizing analysis data..."
             )
 
             for result in results:
@@ -336,7 +363,7 @@ def analyze_videos_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.generate_video_task")
 def generate_video_task(self, event_id: str):
     """Generate the final video for an event.
 
@@ -369,6 +396,8 @@ def generate_video_task(self, event_id: str):
     try:
         # Get event data
         print(f"[Worker:generate_video] Fetching event and analyzed videos from database...")
+        update_generation_progress(supabase, event_id, "initializing", 0.0, "Loading video data...")
+
         event = supabase.table("events").select("*").eq("id", event_id).single().execute()
         videos = supabase.table("videos").select("*").eq("event_id", event_id).eq("status", "analyzed").execute()
 
@@ -389,6 +418,7 @@ def generate_video_task(self, event_id: str):
 
             # ============ OPTIMIZATION: PARALLEL VIDEO DOWNLOADS ============
             print(f"[Worker:generate_video] ---------- PARALLEL DOWNLOADING VIDEOS ----------")
+            update_generation_progress(supabase, event_id, "downloading", 0.0, f"Downloading {len(videos.data)} videos...")
 
             def download_video(video_data):
                 """Download a single video. Runs in parallel."""
@@ -408,12 +438,20 @@ def generate_video_task(self, event_id: str):
                 }
 
             video_paths = []
+            download_count = 0
+            total_vids = len(videos.data)
             with ThreadPoolExecutor(max_workers=min(4, len(videos.data))) as executor:
                 futures = {executor.submit(download_video, (i, v)): i
                           for i, v in enumerate(videos.data)}
                 for future in as_completed(futures):
                     result = future.result()
                     video_paths.append(result)
+                    download_count += 1
+                    update_generation_progress(
+                        supabase, event_id, "downloading",
+                        download_count / total_vids,
+                        f"Downloaded {download_count}/{total_vids} videos..."
+                    )
 
             # Sort by original index
             video_paths.sort(key=lambda x: x["index"])
@@ -425,6 +463,7 @@ def generate_video_task(self, event_id: str):
 
             # Sync videos by audio
             print(f"[Worker:generate_video] ---------- SYNCING AUDIO ----------")
+            update_generation_progress(supabase, event_id, "syncing", 0.5, f"Syncing audio across {len(video_paths)} camera angles...")
             print(f"[Worker:generate_video] Running audio fingerprint sync across {len(video_paths)} videos...")
             sync_offsets = sync_videos([v["path"] for v in video_paths])
             for i, video in enumerate(video_paths):
@@ -433,6 +472,7 @@ def generate_video_task(self, event_id: str):
 
             # Generate timeline
             print(f"[Worker:generate_video] ---------- GENERATING TIMELINE ----------")
+            update_generation_progress(supabase, event_id, "timeline", 0.3, "Creating intelligent multi-angle timeline...")
             timeline = generate_timeline(
                 videos=video_paths,
                 event_type=event_data["event_type"],
@@ -443,6 +483,28 @@ def generate_video_task(self, event_id: str):
             print(f"[Worker:generate_video]   - Zooms: {len(timeline.get('zooms', []))}")
             print(f"[Worker:generate_video]   - Ad slots: {len(timeline.get('ad_slots', []))}")
             print(f"[Worker:generate_video]   - Chapters: {len(timeline.get('chapters', []))}")
+
+            # Apply beat sync if music metadata is available
+            if event_data.get("music_metadata"):
+                beat_times = event_data["music_metadata"].get("beat_times_ms", [])
+                if beat_times:
+                    from services.music_sync import align_cuts_to_beats
+                    original_count = len(timeline["segments"])
+                    timeline["segments"] = align_cuts_to_beats(timeline["segments"], beat_times)
+                    synced_count = sum(1 for s in timeline["segments"] if s.get("beat_synced", False))
+                    print(f"[Worker:generate_video] Beat-synced {synced_count}/{original_count} segment cuts to music")
+
+            # Validate timeline before proceeding
+            from services.render import validate_timeline_for_render
+            video_map = {v["id"]: v for v in video_paths}
+            is_valid, validation_errors = validate_timeline_for_render(timeline.get("segments", []), video_map)
+            if not is_valid:
+                print(f"[Worker:generate_video] WARNING: Timeline validation failed with {len(validation_errors)} errors")
+                for err in validation_errors[:5]:  # Log first 5 errors
+                    print(f"[Worker:generate_video]   - {err}")
+                # Continue anyway but log warning - the render may still succeed
+            else:
+                print(f"[Worker:generate_video] Timeline validation passed")
 
             # Store timeline (upsert with event_id as conflict key)
             supabase.table("timelines").upsert(
@@ -461,6 +523,7 @@ def generate_video_task(self, event_id: str):
             music_path = None
             if event_data.get("music_url"):
                 print(f"[Worker:generate_video] ---------- DOWNLOADING MUSIC ----------")
+                update_generation_progress(supabase, event_id, "music", 0.5, "Downloading your personal music...")
                 bucket, key = parse_s3_uri(event_data["music_url"])
                 music_path = os.path.join(tmpdir, "music.mp3")
                 download_file(bucket, key, music_path)
@@ -472,6 +535,7 @@ def generate_video_task(self, event_id: str):
             ad_slots = timeline.get("ad_slots", [])
             if ad_slots:
                 print(f"[Worker:generate_video] ---------- GENERATING VEO ADS ----------")
+                update_generation_progress(supabase, event_id, "ads", 0.2, f"Generating {len(ad_slots)} AI product ads with Google Veo...")
                 print(f"[Worker:generate_video] Found {len(ad_slots)} ad slots, checking for products...")
                 try:
                     from services.veo_service import generate_ads_for_slots
@@ -544,6 +608,7 @@ def generate_video_task(self, event_id: str):
 
             # Render final video
             print(f"[Worker:generate_video] ---------- RENDERING FINAL VIDEO ----------")
+            update_generation_progress(supabase, event_id, "rendering", 0.1, "Rendering final broadcast-quality video with FFmpeg...")
             output_path = os.path.join(tmpdir, "output.mp4")
             print(f"[Worker:generate_video] Starting FFmpeg render...")
             print(f"[Worker:generate_video]   - Video paths: {len(video_paths)}")
@@ -566,6 +631,7 @@ def generate_video_task(self, event_id: str):
 
             # Upload to S3
             print(f"[Worker:generate_video] ---------- UPLOADING TO S3 ----------")
+            update_generation_progress(supabase, event_id, "uploading", 0.5, f"Uploading final video ({output_size:.0f} MB)...")
             settings = get_settings()
             s3_key = f"events/{event_id}/output/final.mp4"
             print(f"[Worker:generate_video] Uploading to s3://{settings.s3_bucket}/{s3_key}")
@@ -573,6 +639,7 @@ def generate_video_task(self, event_id: str):
             print(f"[Worker:generate_video] Upload complete: {master_url}")
 
             # Update event
+            update_generation_progress(supabase, event_id, "complete", 1.0, "Video generation complete! 🎬")
             supabase.table("events").update({
                 "status": "completed",
                 "master_video_url": master_url,
@@ -597,7 +664,7 @@ def generate_video_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=30)
+@celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.sync_store_products_task")
 def sync_store_products_task(self, store_id: str):
     """Sync products from Shopify store to local cache.
 
@@ -632,7 +699,7 @@ def sync_store_products_task(self, store_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=2)
+@celery.task(bind=True, max_retries=2, name="worker.analyze_music_task")
 def analyze_music_task(self, event_id: str):
     """Analyze uploaded music for beats and tempo."""
     from services.supabase_client import get_supabase
@@ -694,7 +761,7 @@ def analyze_music_task(self, event_id: str):
         raise
 
 
-@celery.task(bind=True, max_retries=2)
+@celery.task(bind=True, max_retries=2, name="worker.generate_highlight_reel_task")
 def generate_highlight_reel_task(self, event_id: str, reel_id: str, query: str, vibe: VibeType, duration: int = 30):
     """Generate a personalized highlight reel.
 
