@@ -32,6 +32,13 @@ class SponsorUpdate(BaseModel):
     sponsor_name: str
 
 
+class SubtlePlacementRequest(BaseModel):
+    product_ids: list[str] | None = None  # Specific products, or auto-select from Shopify
+    max_placements: int = 3
+    min_spacing_seconds: float = 60.0
+    style: Literal["floating", "showcase", "dynamic", "minimal", "lifestyle"] | None = None  # None = auto
+
+
 @router.get("")
 async def list_events(limit: int = 50, offset: int = 0):
     """List all events, ordered by creation date (newest first)."""
@@ -245,3 +252,113 @@ async def get_chapters(event_id: str):
         return {"chapters": []}
 
     return {"chapters": result.data[0].get("chapters", [])}
+
+
+@router.post("/{event_id}/subtle-placements")
+async def create_subtle_placements(event_id: str, request: SubtlePlacementRequest):
+    """Generate subtle in-video product placements using Veo + chroma key.
+
+    This creates product overlays that blend into the event footage rather than
+    inserting separate ad clips. Products appear as floating/animated overlays
+    at optimal moments detected from TwelveLabs analysis.
+
+    The pipeline:
+    1. Detect optimal placement times from video analysis
+    2. Generate Veo product videos on green screen
+    3. Chroma key remove the green background
+    4. Composite onto event footage at detected positions
+
+    Args:
+        event_id: Event ID
+        request: Placement configuration
+    """
+    supabase = get_supabase()
+
+    # Get event
+    event = supabase.table("events").select("*").eq("id", event_id).execute()
+    if not event.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    event_data = event.data[0]
+
+    if event_data["status"] not in ("analyzed", "completed"):
+        raise HTTPException(
+            status_code=400,
+            detail="Event must be analyzed before adding placements"
+        )
+
+    # Get video analysis for placement detection
+    videos = (
+        supabase.table("videos")
+        .select("analysis_data")
+        .eq("event_id", event_id)
+        .not_.is_("analysis_data", "null")
+        .execute()
+    )
+
+    if not videos.data:
+        raise HTTPException(
+            status_code=400,
+            detail="No analyzed videos found"
+        )
+
+    # Combine analysis from all videos
+    combined_analysis = {
+        "scenes": [],
+        "moments": [],
+    }
+    for video in videos.data:
+        analysis = video.get("analysis_data", {})
+        combined_analysis["scenes"].extend(analysis.get("scenes", []))
+        combined_analysis["moments"].extend(analysis.get("moments", []))
+
+    # Get Shopify products if connected
+    products = []
+    if event_data.get("shopify_store_url"):
+        from services.shopify_client import get_shopify_products
+        try:
+            products = await get_shopify_products(event_id)
+        except Exception as e:
+            print(f"Failed to fetch Shopify products: {e}")
+
+    if not products:
+        raise HTTPException(
+            status_code=400,
+            detail="No Shopify products available. Connect a store first."
+        )
+
+    # Filter to specific products if requested
+    if request.product_ids:
+        products = [p for p in products if p.get("id") in request.product_ids]
+
+    # Detect optimal placement times (always returns at least one)
+    from services.subtle_placement_service import detect_optimal_placement_times
+
+    placement_times = detect_optimal_placement_times(
+        video_analysis=combined_analysis,
+        max_placements=request.max_placements,
+        min_spacing_seconds=request.min_spacing_seconds,
+        # video_duration_sec will be extracted from analysis or use default
+    )
+
+    # Override style if specified
+    if request.style:
+        for pt in placement_times:
+            pt["style"] = request.style
+
+    # Trigger async task for placement generation
+    from worker import create_subtle_placements_task
+    task = create_subtle_placements_task.delay(
+        event_id=event_id,
+        products=[{"id": p.get("id"), "title": p.get("title"), "description": p.get("description", "")} for p in products[:request.max_placements]],
+        placement_times=placement_times,
+        event_type=event_data["event_type"],
+    )
+
+    return {
+        "message": "Subtle placement generation started",
+        "event_id": event_id,
+        "task_id": task.id,
+        "placement_count": len(placement_times),
+        "placements": placement_times,
+    }

@@ -30,6 +30,19 @@ def setup_worker_path(sender=None, **kwargs):
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
+    # Load .env file and set GOOGLE_APPLICATION_CREDENTIALS if specified
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(backend_dir, ".env"))
+
+    # Log GCP configuration for debugging
+    gcp_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    gcp_project = os.environ.get("GCP_PROJECT_ID")
+    gcs_bucket = os.environ.get("GCS_BUCKET")
+    print(f"[Worker] GCP Configuration:")
+    print(f"[Worker]   GOOGLE_APPLICATION_CREDENTIALS: {gcp_creds}")
+    print(f"[Worker]   GCP_PROJECT_ID: {gcp_project}")
+    print(f"[Worker]   GCS_BUCKET: {gcs_bucket}")
+
 VibeType = Literal["high_energy", "emotional", "calm"]
 
 settings = get_settings()
@@ -585,118 +598,168 @@ def generate_video_task(self, event_id: str):
                 music_size = os.path.getsize(music_path) / (1024 * 1024)
                 print(f"[Worker:generate_video] Music downloaded: {music_size:.1f} MB")
 
-            # Generate Veo ads if brand products are connected and we have ad slots
-            generated_ads = None
-            ad_slots = timeline.get("ad_slots", [])
-            if ad_slots:
-                print(f"[Worker:generate_video] ---------- GENERATING VEO ADS ----------")
-                update_generation_progress(supabase, event_id, "ads", 0.2, f"Generating {len(ad_slots)} AI product ads with Google Veo...")
-                print(f"[Worker:generate_video] Found {len(ad_slots)} ad slots, checking for products...")
-                try:
-                    from services.veo_service import generate_ads_for_slots
-                    from services.shopify_sync import get_event_brand_products
-                    from services.encryption import decrypt
-                    import httpx
+            # Fetch products for Veo ads and subtle placements
+            print(f"[Worker:generate_video] ---------- FETCHING PRODUCTS ----------")
+            products = []
+            try:
+                from services.shopify_sync import get_event_brand_products
+                from services.encryption import decrypt
+                import httpx
 
-                    products = []
+                # Try new model first: get products from event_brand_products
+                brand_products = get_event_brand_products(event_id)
+                if brand_products:
+                    for bp in brand_products:
+                        product = bp.get("product")
+                        if product:
+                            products.append({
+                                "id": product["id"],
+                                "title": product["title"],
+                                "description": product.get("description", ""),
+                                "price": str(product.get("price", "0.00")),
+                                "image_url": product.get("image_url"),
+                            })
+                    print(f"[Worker:generate_video] Using {len(products)} products from event_brand_products")
 
-                    # Try new model first: get products from event_brand_products
-                    brand_products = get_event_brand_products(event_id)
-                    if brand_products:
-                        for bp in brand_products:
-                            product = bp.get("product")
-                            if product:
+                # Fall back to legacy model if no brand products
+                elif event_data.get("shopify_access_token"):
+                    print(f"[Worker:generate_video] Falling back to legacy Shopify connection...")
+                    access_token = decrypt(event_data["shopify_access_token"])
+                    shop_url = event_data["shopify_store_url"]
+
+                    with httpx.Client() as client:
+                        response = client.get(
+                            f"{shop_url}/admin/api/{settings.shopify_api_version}/products.json",
+                            headers={
+                                "X-Shopify-Access-Token": access_token,
+                                "Content-Type": "application/json",
+                            },
+                            params={"limit": 5, "status": "active"},
+                        )
+
+                        if response.status_code == 200:
+                            shopify_products = response.json().get("products", [])
+                            for p in shopify_products:
+                                variant = p["variants"][0] if p.get("variants") else {}
+                                image = p["images"][0] if p.get("images") else {}
                                 products.append({
-                                    "id": product["id"],
-                                    "title": product["title"],
-                                    "description": product.get("description", ""),
-                                    "price": str(product.get("price", "0.00")),
-                                    "image_url": product.get("image_url"),
+                                    "id": str(p["id"]),
+                                    "title": p["title"],
+                                    "description": p.get("body_html", ""),
+                                    "price": variant.get("price", "0.00"),
+                                    "image_url": image.get("src"),
                                 })
-                        print(f"[Worker:generate_video] Using {len(products)} products from event_brand_products")
+                    print(f"[Worker:generate_video] Using {len(products)} products from legacy Shopify")
+                else:
+                    # Auto-select from first available store in database
+                    print(f"[Worker:generate_video] No products connected, auto-selecting from database...")
+                    from services.shopify_sync import get_first_available_store, get_store_products
+                    from services.gemini_service import match_product_to_video
 
-                    # Fall back to legacy model if no brand products
-                    elif event_data.get("shopify_access_token"):
-                        print(f"[Worker:generate_video] Falling back to legacy Shopify connection...")
-                        access_token = decrypt(event_data["shopify_access_token"])
-                        shop_url = event_data["shopify_store_url"]
+                    store = get_first_available_store()
+                    if store:
+                        print(f"[Worker:generate_video] Found store: {store.get('shop_name', store['shop_domain'])}")
+                        store_products = get_store_products(store["id"], limit=10)
 
-                        with httpx.Client() as client:
-                            response = client.get(
-                                f"{shop_url}/admin/api/{settings.shopify_api_version}/products.json",
-                                headers={
-                                    "X-Shopify-Access-Token": access_token,
-                                    "Content-Type": "application/json",
-                                },
-                                params={"limit": 5, "status": "active"},
+                        if store_products:
+                            # Extract video themes from analysis data for product matching
+                            video_themes = []
+                            for vp in video_paths:
+                                analysis = vp.get("analysis_data", {})
+                                if analysis.get("gist"):
+                                    video_themes.append(analysis["gist"])
+
+                            # Use Gemini to pick the best product
+                            best_product = match_product_to_video(
+                                store_products,
+                                event_data["event_type"],
+                                video_themes if video_themes else None,
                             )
 
-                            if response.status_code == 200:
-                                shopify_products = response.json().get("products", [])
-                                for p in shopify_products:
-                                    variant = p["variants"][0] if p.get("variants") else {}
-                                    image = p["images"][0] if p.get("images") else {}
-                                    products.append({
-                                        "id": str(p["id"]),
-                                        "title": p["title"],
-                                        "description": p.get("body_html", ""),
-                                        "price": variant.get("price", "0.00"),
-                                        "image_url": image.get("src"),
-                                    })
-                        print(f"[Worker:generate_video] Using {len(products)} products from legacy Shopify")
+                            if best_product:
+                                products.append({
+                                    "id": best_product["id"],
+                                    "title": best_product["title"],
+                                    "description": best_product.get("description", ""),
+                                    "price": str(best_product.get("price", "0.00")),
+                                    "image_url": best_product.get("image_url"),
+                                })
+                                # Set sponsor name from store
+                                sponsor_name = store.get("shop_name") or store["shop_domain"].replace(".myshopify.com", "")
+                                event_data["sponsor_name"] = sponsor_name
+                                print(f"[Worker:generate_video] Auto-selected product: {best_product['title']} from {sponsor_name}")
                     else:
-                        # Auto-select from first available store in database
-                        print(f"[Worker:generate_video] No products connected, auto-selecting from database...")
-                        from services.shopify_sync import get_first_available_store, get_store_products
-                        from services.gemini_service import match_product_to_video
+                        print(f"[Worker:generate_video] No stores in database")
 
-                        store = get_first_available_store()
-                        if store:
-                            print(f"[Worker:generate_video] Found store: {store.get('shop_name', store['shop_domain'])}")
-                            store_products = get_store_products(store["id"], limit=10)
+            except Exception as e:
+                print(f"[Worker:generate_video] Failed to fetch products: {type(e).__name__}: {e}")
 
-                            if store_products:
-                                # Extract video themes from analysis data for product matching
-                                video_themes = []
-                                for vp in video_paths:
-                                    analysis = vp.get("analysis_data", {})
-                                    if analysis.get("gist"):
-                                        video_themes.append(analysis["gist"])
+            print(f"[Worker:generate_video] Total products available: {len(products)}")
 
-                                # Use Gemini to pick the best product
-                                best_product = match_product_to_video(
-                                    store_products,
-                                    event_data["event_type"],
-                                    video_themes if video_themes else None,
-                                )
+            # Generate Veo ads if we have ad slots and products
+            # Using Vertex AI Veo 2 inpainting API for seamless product placement
+            generated_ads = None
+            ad_slots = timeline.get("ad_slots", [])
+            if ad_slots and products:
+                print(f"[Worker:generate_video] ---------- GENERATING VEO ADS (INPAINTING) ----------")
+                update_generation_progress(supabase, event_id, "ads", 0.2, f"Generating {len(ad_slots)} AI product ads with Veo 2 inpainting...")
+                try:
+                    from services.vertex_video_inpaint import create_all_inpainted_placements
 
-                                if best_product:
-                                    products.append({
-                                        "id": best_product["id"],
-                                        "title": best_product["title"],
-                                        "description": best_product.get("description", ""),
-                                        "price": str(best_product.get("price", "0.00")),
-                                        "image_url": best_product.get("image_url"),
-                                    })
-                                    # Set sponsor name from store
-                                    sponsor_name = store.get("shop_name") or store["shop_domain"].replace(".myshopify.com", "")
-                                    event_data["sponsor_name"] = sponsor_name
-                                    print(f"[Worker:generate_video] Auto-selected product: {best_product['title']} from {sponsor_name}")
-                        else:
-                            print(f"[Worker:generate_video] No stores in database, skipping ad generation")
+                    # Convert ad_slots to placement format for inpainting
+                    placements_for_inpaint = []
+                    for slot in ad_slots:
+                        placements_for_inpaint.append({
+                            "timestamp_ms": slot.get("timestamp_ms", 0),
+                            "duration_ms": slot.get("duration_ms", 4000),
+                            "position": slot.get("position", "top_right"),
+                        })
 
-                    if products:
-                        # Generate Veo ads for each slot
-                        print(f"[Worker:generate_video] Generating Veo ads for {len(products)} products...")
+                    print(f"[Worker:generate_video] Using Vertex AI Veo 2 inpainting for {len(products)} products...")
+                    # Use the first video as the source for inpainting
+                    source_video = video_paths[0]["path"] if video_paths else None
+                    print(f"[Worker:generate_video] Source video path: {source_video}")
+
+                    # Log GCP configuration
+                    from services.vertex_video_inpaint import get_gcp_project_id, get_gcs_bucket
+                    try:
+                        project_id = get_gcp_project_id()
+                        print(f"[Worker:generate_video] GCP Project ID: {project_id}")
+                    except Exception as gcp_e:
+                        print(f"[Worker:generate_video] Failed to get GCP Project ID: {gcp_e}")
+                    try:
+                        bucket = get_gcs_bucket()
+                        print(f"[Worker:generate_video] GCS Bucket: {bucket}")
+                    except Exception as gcs_e:
+                        print(f"[Worker:generate_video] Failed to get GCS Bucket: {gcs_e}")
+
+                    if source_video:
+                        generated_ads = create_all_inpainted_placements(
+                            event_video_path=source_video,
+                            products=products,
+                            placements=placements_for_inpaint,
+                            event_type=event_data["event_type"],
+                        )
+                        print(f"[Worker:generate_video] Generated {len(generated_ads)} inpainted ads")
+                    else:
+                        print(f"[Worker:generate_video] No source video available for inpainting")
+                except Exception as e:
+                    import traceback
+                    print(f"[Worker:generate_video] Vertex AI inpainting failed: {type(e).__name__}: {e}")
+                    print(f"[Worker:generate_video] Traceback: {traceback.format_exc()}")
+                    print(f"[Worker:generate_video] Falling back to standard Veo generation...")
+                    # Fallback to standard Veo generation
+                    try:
+                        from services.veo_service import generate_ads_for_slots
                         generated_ads = generate_ads_for_slots(
                             products=products,
                             ad_slots=ad_slots,
                             event_type=event_data["event_type"],
                             sponsor_name=event_data.get("sponsor_name"),
                         )
-                        print(f"[Worker:generate_video] Generated {len(generated_ads)} Veo ads")
-                except Exception as e:
-                    print(f"[Worker:generate_video] Failed to generate Veo ads: {type(e).__name__}: {e}")
+                        print(f"[Worker:generate_video] Generated {len(generated_ads)} Veo ads (fallback)")
+                    except Exception as fallback_e:
+                        print(f"[Worker:generate_video] Fallback also failed: {type(fallback_e).__name__}: {fallback_e}")
                     # Continue without ads - not a fatal error
 
             # Render final video
@@ -721,6 +784,233 @@ def generate_video_task(self, event_id: str):
 
             output_size = os.path.getsize(output_path) / (1024 * 1024)
             print(f"[Worker:generate_video] Render complete: {output_size:.1f} MB")
+
+            # Generate subtle Veo product placements if products available
+            # Using Vertex AI Veo 2 inpainting for seamless product integration
+            subtle_placements_applied = False
+            placement_times = None  # Initialize for fallback access
+            if products:
+                print(f"[Worker:generate_video] ---------- GENERATING SUBTLE PLACEMENTS (INPAINTING) ----------")
+                update_generation_progress(supabase, event_id, "placements", 0.2, "Creating subtle AI product placements with Veo 2 inpainting...")
+                try:
+                    from services.subtle_placement_service import (
+                        detect_optimal_placement_times,
+                        PLACEMENT_STYLES,
+                        splice_inpainted_clips,
+                    )
+                    from services.vertex_video_inpaint import (
+                        inpaint_product_into_video,
+                    )
+                    import subprocess
+
+                    # Build combined analysis for placement detection
+                    combined_analysis = {
+                        "scenes": [],
+                        "moments": [],
+                    }
+                    for vp in video_paths:
+                        analysis = vp.get("analysis_data", {})
+                        combined_analysis["scenes"].extend(analysis.get("scenes", []))
+                        combined_analysis["moments"].extend(analysis.get("moments", []))
+
+                    # Get video duration for fallback placement calculation
+                    probe_cmd = [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        output_path
+                    ]
+                    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                    video_duration_sec = float(probe_result.stdout.strip()) if probe_result.stdout.strip() else 120.0
+                    print(f"[Worker:generate_video] Video duration: {video_duration_sec:.1f}s")
+
+                    # Detect optimal placement times (ALWAYS returns at least one)
+                    placement_times = detect_optimal_placement_times(
+                        video_analysis=combined_analysis,
+                        max_placements=min(3, len(products)),
+                        min_spacing_seconds=60.0,
+                        video_duration_sec=video_duration_sec,
+                    )
+
+                    if placement_times:
+                        print(f"[Worker:generate_video] Found {len(placement_times)} optimal placement times")
+                        print(f"[Worker:generate_video] Using Vertex AI Veo 2 INPAINTING for seamless integration")
+
+                        # Generate inpainted clips for each placement
+                        inpainted_clips = []
+                        for i, pt in enumerate(placement_times):
+                            product = products[i % len(products)]
+                            style = pt.get("style", "floating")
+                            style_config = PLACEMENT_STYLES.get(style, PLACEMENT_STYLES["floating"])
+
+                            # Map style to inpainting position
+                            position_map = {
+                                "corner": "top_right",
+                                "lower_third": "lower_third",
+                                "floating": "center_right",
+                                "side_panel": "center_right",
+                            }
+                            inpaint_position = position_map.get(style_config.get("position", "corner"), "top_right")
+
+                            print(f"[Worker:generate_video] Inpainting product {i + 1}/{len(placement_times)}: {product.get('title')}")
+                            print(f"[Worker:generate_video] Position: {inpaint_position}, Time: {pt['start_time']}s")
+                            update_generation_progress(
+                                supabase, event_id, "placements",
+                                0.2 + (0.6 * i / len(placement_times)),
+                                f"Inpainting product {i + 1}/{len(placement_times)} into video..."
+                            )
+
+                            try:
+                                # Use Vertex AI Veo 2 inpainting (requires 8 seconds)
+                                inpainted_path = inpaint_product_into_video(
+                                    video_path=output_path,
+                                    product=product,
+                                    timestamp_sec=pt["start_time"],
+                                    position=inpaint_position,
+                                    duration_sec=8.0,  # Veo 2 requires exactly 8 seconds
+                                )
+
+                                inpainted_clips.append({
+                                    "inpainted_path": inpainted_path,
+                                    "start_time": pt["start_time"],
+                                    "duration": 8.0,  # Veo 2 outputs 8 second clips
+                                })
+                                print(f"[Worker:generate_video] ✓ Inpainting successful for {product.get('title')}")
+
+                            except Exception as inpaint_e:
+                                print(f"[Worker:generate_video] Inpainting failed for {product.get('title')}: {inpaint_e}")
+                                # Continue with other placements
+                                continue
+
+                        # Splice all inpainted clips into the video
+                        if inpainted_clips:
+                            print(f"[Worker:generate_video] Splicing {len(inpainted_clips)} inpainted clips...")
+                            update_generation_progress(supabase, event_id, "placements", 0.9, "Splicing inpainted segments into video...")
+
+                            output_with_placements = os.path.join(tmpdir, "output_with_inpaint.mp4")
+
+                            # Use splice function (already imported above)
+                            splice_inpainted_clips(output_path, inpainted_clips, output_with_placements)
+
+                            # Replace output with the version including placements
+                            os.replace(output_with_placements, output_path)
+                            subtle_placements_applied = True
+
+                            output_size = os.path.getsize(output_path) / (1024 * 1024)
+                            print(f"[Worker:generate_video] Inpainted placements complete: {output_size:.1f} MB")
+
+                            # Cleanup inpainted clips
+                            for clip in inpainted_clips:
+                                try:
+                                    os.remove(clip["inpainted_path"])
+                                except OSError:
+                                    pass
+                        else:
+                            print(f"[Worker:generate_video] No inpainted clips generated, trying fallback...")
+                            raise Exception("No inpainted clips generated, falling back to overlay method")
+
+                    else:
+                        print(f"[Worker:generate_video] No suitable placement times detected, skipping subtle placements")
+
+                except Exception as e:
+                    print(f"[Worker:generate_video] Inpainting failed: {type(e).__name__}: {e}")
+                    print(f"[Worker:generate_video] Falling back to overlay/greenscreen method...")
+
+                    # Fallback to the original greenscreen/overlay method
+                    try:
+                        from services.subtle_placement_service import (
+                            detect_optimal_placement_times,
+                            generate_greenscreen_product,
+                            chromakey_and_scale,
+                            composite_multiple_placements,
+                            PLACEMENT_STYLES,
+                        )
+                        import asyncio
+                        import subprocess
+
+                        # If placement_times wasn't computed yet, compute it now
+                        if placement_times is None:
+                            combined_analysis = {
+                                "scenes": [],
+                                "moments": [],
+                            }
+                            for vp in video_paths:
+                                analysis = vp.get("analysis_data", {})
+                                combined_analysis["scenes"].extend(analysis.get("scenes", []))
+                                combined_analysis["moments"].extend(analysis.get("moments", []))
+
+                            probe_cmd = [
+                                "ffprobe", "-v", "error",
+                                "-show_entries", "format=duration",
+                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                output_path
+                            ]
+                            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                            video_duration_sec = float(probe_result.stdout.strip()) if probe_result.stdout.strip() else 120.0
+
+                            placement_times = detect_optimal_placement_times(
+                                video_analysis=combined_analysis,
+                                max_placements=min(3, len(products)),
+                                min_spacing_seconds=60.0,
+                                video_duration_sec=video_duration_sec,
+                            )
+
+                        if placement_times:
+                            placements = []
+                            for i, pt in enumerate(placement_times):
+                                product = products[i % len(products)]
+                                style = pt.get("style", "floating")
+
+                                print(f"[Worker:generate_video] (Fallback) Generating overlay {i + 1}/{len(placement_times)}")
+
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    greenscreen_path = loop.run_until_complete(
+                                        generate_greenscreen_product(
+                                            product=product,
+                                            style=style,
+                                            event_type=event_data["event_type"],
+                                            event_video_path=output_path,
+                                            timestamp_sec=pt["start_time"],
+                                        )
+                                    )
+                                finally:
+                                    loop.close()
+
+                                style_config = PLACEMENT_STYLES.get(style, PLACEMENT_STYLES["floating"])
+                                keyed_path = os.path.join(tmpdir, f"keyed_{i}.mov")
+                                chromakey_and_scale(greenscreen_path, keyed_path, scale=style_config.get("scale", 0.25))
+
+                                placements.append({
+                                    "overlay_path": keyed_path,
+                                    "start_time": pt["start_time"],
+                                    "duration": pt.get("duration", 4.0),
+                                    "position": pt.get("position", style_config.get("position", "corner")),
+                                    "fade_duration": pt.get("fade_duration", 0.5),
+                                })
+
+                                try:
+                                    os.remove(greenscreen_path)
+                                except OSError:
+                                    pass
+
+                            if placements:
+                                output_with_placements = os.path.join(tmpdir, "output_with_placements.mp4")
+                                composite_multiple_placements(output_path, placements, output_with_placements)
+                                os.replace(output_with_placements, output_path)
+                                subtle_placements_applied = True
+                                print(f"[Worker:generate_video] Fallback overlay placements complete")
+
+                                for p in placements:
+                                    try:
+                                        os.remove(p["overlay_path"])
+                                    except OSError:
+                                        pass
+
+                    except Exception as fallback_e:
+                        print(f"[Worker:generate_video] Fallback also failed: {type(fallback_e).__name__}: {fallback_e}")
+                        # Continue without placements - not a fatal error
 
             # Upload to S3
             print(f"[Worker:generate_video] ---------- UPLOADING TO S3 ----------")
@@ -1067,5 +1357,114 @@ def generate_highlight_reel_task(self, event_id: str, reel_id: str, query: str, 
 
         if "rate limit" in str(e).lower():
             print(f"[Worker:highlight_reel] Transient error detected, scheduling retry...")
+            raise self.retry(exc=e)
+        raise
+
+
+@celery.task(bind=True, max_retries=2, name="worker.create_subtle_placements_task")
+def create_subtle_placements_task(
+    self,
+    event_id: str,
+    products: list[dict],
+    placement_times: list[dict],
+    event_type: str = "sports",
+    use_vertex_ai: bool = True,
+):
+    """Generate subtle in-video product placements.
+
+    Supports multiple methods (tries in order):
+    1. Vertex AI Veo 2 inpainting - inserts products directly into video
+    2. Veo scene-matched generation - generates matched overlays
+    3. Image-based overlays - fastest fallback
+
+    Steps:
+    1. Download the master video
+    2. For each placement: generate product placement using best method
+    3. Splice inpainted segments or composite overlays
+    4. Upload new version
+    """
+    from services.supabase_client import get_supabase
+    from services.s3_client import download_file, upload_file, parse_s3_uri
+    from services.subtle_placement_service import create_multiple_placements
+
+    import tempfile
+    import os
+    import asyncio
+
+    print(f"[Worker:subtle_placements] ========== CREATING SUBTLE PLACEMENTS ==========")
+    print(f"[Worker:subtle_placements] Event ID: {event_id}")
+    print(f"[Worker:subtle_placements] Products: {len(products)}")
+    print(f"[Worker:subtle_placements] Placements: {len(placement_times)}")
+    print(f"[Worker:subtle_placements] Use Vertex AI: {use_vertex_ai}")
+
+    supabase = get_supabase()
+
+    try:
+        # Get event
+        event = supabase.table("events").select("*").eq("id", event_id).single().execute()
+        event_data = event.data
+
+        if not event_data.get("master_video_url"):
+            print(f"[Worker:subtle_placements] ERROR: No master video found")
+            raise ValueError("No master video found. Generate the video first.")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Download master video
+            print(f"[Worker:subtle_placements] Downloading master video...")
+            bucket, key = parse_s3_uri(event_data["master_video_url"])
+            master_path = os.path.join(tmpdir, "master.mp4")
+            download_file(bucket, key, master_path)
+            print(f"[Worker:subtle_placements] Master video downloaded")
+
+            # Use the unified create_multiple_placements function
+            # This handles Vertex AI inpainting, Veo scene-matching, and image fallback
+            print(f"[Worker:subtle_placements] ---------- GENERATING PLACEMENTS ----------")
+            output_path = os.path.join(tmpdir, "master_with_placements.mp4")
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    create_multiple_placements(
+                        event_video=master_path,
+                        products=products,
+                        placement_times=placement_times,
+                        output_path=output_path,
+                        event_type=event_type,
+                        use_scene_matching=True,
+                        use_vertex_ai=use_vertex_ai,
+                    )
+                )
+            finally:
+                loop.close()
+
+            # Upload new version
+            print(f"[Worker:subtle_placements] ---------- UPLOADING ----------")
+            settings = get_settings()
+            s3_key = f"events/{event_id}/output/final_with_placements.mp4"
+            new_url = upload_file(output_path, settings.s3_bucket, s3_key, "video/mp4")
+            print(f"[Worker:subtle_placements] Uploaded: {new_url}")
+
+            # Update event with new master URL
+            supabase.table("events").update({
+                "master_video_url": new_url,
+            }).eq("id", event_id).execute()
+
+        print(f"[Worker:subtle_placements] ========== SUBTLE PLACEMENTS COMPLETE ==========")
+        return {
+            "status": "success",
+            "event_id": event_id,
+            "placements_added": len(placement_times),
+            "new_video_url": new_url,
+        }
+
+    except Exception as e:
+        print(f"[Worker:subtle_placements] ========== ERROR ==========")
+        print(f"[Worker:subtle_placements] Error: {type(e).__name__}: {str(e)}")
+        import traceback
+        print(f"[Worker:subtle_placements] Traceback:\n{traceback.format_exc()}")
+
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            print(f"[Worker:subtle_placements] Transient error detected, scheduling retry...")
             raise self.retry(exc=e)
         raise

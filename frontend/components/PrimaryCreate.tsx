@@ -512,10 +512,10 @@ export default function PrimaryCreate() {
                             {infoContent[displayedStep]}
                         </div>
                     </div>
-                    {step > 0 && <img src={arrow} alt="arrow" className="absolute left-100 top-100" height="15vh"
+                    {step > 0 && <img src={arrow} alt="arrow" className="absolute left-900 top-85" height="15vh"
                                       style={{animation: 'text-fade-in 0.9s ease-in-out forwards'}}/>}
                     {step > 1 && <div className={isFadingOut ? 'fade-no-fade-text' : 'fade-in-text-delayed'}
-                                      style={{position: "absolute", left: '34vw', top: '35vh', opacity: "0"}}>
+                                      style={{position: "absolute", left: '38vw', top: '33vh', opacity: "0"}}>
                         <Button
                             component="label"
                             color="info"
@@ -545,7 +545,7 @@ export default function PrimaryCreate() {
                             />
                         </Button>
                     </div>}
-                    {step == 2 && <div className="absolute" style={{left: '59vw', top: '66vh'}}>
+                    {step == 2 && <div className="absolute" style={{left: '59vw', top: '68vh'}}>
                         <div className={isFadingOut ? 'fade-no-fade-text' : 'fade-in-text-delayed'}
                              style={{opacity: "0%"}}>
                             <Button

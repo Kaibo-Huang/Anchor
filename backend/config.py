@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     s3_bucket: str = ""
 
+    # GCP / Vertex AI (for Veo 2 video inpainting)
+    gcp_project_id: str = ""
+    gcp_region: str = "us-central1"  # Vertex AI region
+    gcs_bucket: str = ""  # GCS bucket for Vertex AI operations
+
     # S3 Upload Optimization
     s3_use_acceleration: bool = True
     s3_multipart_threshold: int = 100 * 1024 * 1024  # 100MB threshold

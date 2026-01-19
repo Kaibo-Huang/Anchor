@@ -16,6 +16,7 @@ from worker_optimized import (
     sync_store_products_task,
     analyze_music_task,
     generate_highlight_reel_task,
+    create_subtle_placements_task,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "sync_store_products_task",
     "analyze_music_task",
     "generate_highlight_reel_task",
+    "create_subtle_placements_task",
 ]

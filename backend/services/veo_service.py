@@ -13,9 +13,15 @@ from config import get_settings
 
 
 def get_veo_client():
-    """Get Google GenAI client for Veo."""
+    """Get Google GenAI client for Veo using Vertex AI."""
     settings = get_settings()
-    return genai.Client(api_key=settings.google_api_key)
+    # Use Vertex AI with OAuth2 credentials (not API key)
+    # Requires GOOGLE_APPLICATION_CREDENTIALS env var to be set
+    return genai.Client(
+        vertexai=True,
+        project=settings.gcp_project_id,
+        location=settings.gcp_region or "us-central1",
+    )
 
 
 # ============================================================================
@@ -164,52 +170,36 @@ def build_product_ad_prompt(
         description = re.sub(r'<[^>]+>', '', description)  # Remove HTML
         description = description[:150]  # Limit length
 
-    # Build prompt components
-    prompt_parts = []
+    # Build prompt - optimized for green screen compositing
+    prompt = f"""Professional product commercial: {product['title']} on solid bright green (#00FF00) chroma key background.
 
-    # 1. Core product showcase
-    prompt_parts.append(
-        f"Cinematic product advertisement featuring {product['title']}"
-    )
+PRODUCT PRESENTATION:
+- {style["visual"]}
+- {style["lighting"]}
+- {motion["motion"]}
 
-    # 2. Product description context
+VISUAL STYLE:
+- Energy: {context['energy']} atmosphere
+- Color reflections on product: {context['colors']} tones
+- {style["motion"]}
+
+TECHNICAL REQUIREMENTS:
+- Background: SOLID UNIFORM BRIGHT GREEN (#00FF00) - essential for chroma key
+- No shadows cast on background - only on product
+- Product centered, filling 50-70% of frame
+- 4K ultra high definition, broadcast-ready quality
+- {motion['transition_hint']}"""
+
     if description:
-        prompt_parts.append(f"showcasing {description}")
+        prompt += f"\n\nProduct details: {description}"
 
-    # 3. Visual style
-    prompt_parts.append(style["visual"])
-
-    # 4. Lighting
-    prompt_parts.append(style["lighting"])
-
-    # 5. Camera motion for transitions
-    prompt_parts.append(motion["motion"])
-
-    # 6. Event context matching
-    prompt_parts.append(f"matching {context['energy']} atmosphere")
-
-    # 7. Color grading hint
-    prompt_parts.append(f"color palette: {context['colors']}")
-
-    # 8. Professional quality markers
-    prompt_parts.append(
-        "4K ultra high definition, professional commercial quality, "
-        "broadcast-ready, premium production value"
-    )
-
-    # 9. Transition hints
-    prompt_parts.append(f"designed for {motion['transition_hint']}")
-
-    # 10. Sponsor integration if provided
     if sponsor_name:
-        prompt_parts.append(f"subtle {sponsor_name} branding integration")
+        prompt += f"\n\nSubtle {sponsor_name} branding may appear on product"
 
-    # 11. Scene continuity if preceding scene known
     if preceding_scene:
-        prompt_parts.append(f"following from {preceding_scene}, maintaining visual continuity")
+        prompt += f"\n\nDesigned to follow: {preceding_scene}"
 
-    # Combine into final prompt
-    prompt = ", ".join(prompt_parts)
+    prompt += "\n\nCRITICAL: The green background must be perfectly uniform for chroma key extraction - no gradients, no shadows on background."
 
     return prompt
 
@@ -235,16 +225,19 @@ def generate_product_video(
     """
     client = get_veo_client()
 
-    # Build prompt based on style
+    # Build prompt based on style - optimized for green screen compositing
     style_prompts = {
-        "showcase": f"Premium product showcase of {product_name}, professional studio lighting, smooth rotating camera movement, clean gradient background, commercial quality, 4K",
-        "lifestyle": f"Lifestyle shot featuring {product_name} in natural aspirational setting, warm golden hour lighting, cinematic depth of field, authentic moment",
-        "action": f"Dynamic action shot of {product_name} in use, energetic camera movement, high-speed capture, powerful impact moment, professional sports commercial style",
+        "showcase": f"Professional product commercial: {product_name} centered on solid bright green (#00FF00) chroma key background. Smooth rotating camera movement around product, professional studio lighting, 4K broadcast quality. Product fills 60% of frame, perfect for compositing.",
+        "lifestyle": f"Product showcase: {product_name} on uniform bright green (#00FF00) background. Warm lighting with slight golden tones on product, subtle floating motion, cinematic quality. Clean chroma key background for compositing.",
+        "action": f"Dynamic product commercial: {product_name} on pure bright green (#00FF00) chroma key background. Energetic entrance animation, product spinning or bouncing with energy, professional sports commercial lighting, 4K quality. Perfect green screen extraction.",
     }
 
     prompt = style_prompts.get(style, style_prompts["showcase"])
     if product_description:
-        prompt += f", {product_description}"
+        prompt += f" Product details: {product_description}."
+
+    # Add universal green screen requirements
+    prompt += " CRITICAL: Background must be solid uniform bright green (#00FF00) for chroma key - no shadows, no gradients on background."
 
     # Generate video
     operation = client.models.generate_videos(
@@ -272,32 +265,14 @@ def generate_product_video(
         raise ValueError("No video generated")
 
     # Get result
-    video = operation.response.generated_videos[0]
+    generated_video = operation.response.generated_videos[0]
 
-    # Save to temp file
+    # Save to temp file using SDK's save() method
     output_path = os.path.join(tempfile.gettempdir(), f"veo_{int(time.time())}.mp4")
 
-    # Download video from remote URL
-    import httpx
-
-    # Get the video URL - Veo returns remote URLs
-    video_url = video.video.uri if hasattr(video.video, 'uri') else str(video.video)
-
-    # Download the video file (follow redirects, with API key auth)
-    settings = get_settings()
-    with httpx.Client(timeout=120.0, follow_redirects=True) as http_client:
-        # Add API key as query parameter for authentication
-        download_url = video_url
-        if "?" in download_url:
-            download_url += f"&key={settings.google_api_key}"
-        else:
-            download_url += f"?key={settings.google_api_key}"
-
-        response = http_client.get(download_url)
-        response.raise_for_status()
-
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
+    # Use the SDK's built-in save method
+    generated_video.video.save(output_path)
+    print(f"[Veo] Video saved to {output_path}")
 
     return output_path
 
@@ -367,35 +342,13 @@ def generate_native_ad(
         raise ValueError("No video generated by Veo")
 
     # Get result
-    video = operation.response.generated_videos[0]
+    generated_video = operation.response.generated_videos[0]
 
-    # Save to temp file
+    # Save to temp file using SDK's save() method
     output_path = os.path.join(tempfile.gettempdir(), f"veo_ad_{int(time.time())}.mp4")
 
-    # Download video from remote URL
-    import httpx
-
-    # Get the video URL - Veo returns remote URLs
-    video_url = video.video.uri if hasattr(video.video, 'uri') else str(video.video)
-
-    print(f"[Veo] Downloading video from {video_url}")
-
-    # Download the video file (follow redirects, with API key auth)
-    settings = get_settings()
-    with httpx.Client(timeout=120.0, follow_redirects=True) as http_client:
-        # Add API key as query parameter for authentication
-        download_url = video_url
-        if "?" in download_url:
-            download_url += f"&key={settings.google_api_key}"
-        else:
-            download_url += f"?key={settings.google_api_key}"
-
-        response = http_client.get(download_url)
-        response.raise_for_status()
-
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
-
+    # Use the SDK's built-in save method
+    generated_video.video.save(output_path)
     print(f"[Veo] Generated ad saved to {output_path}")
 
     return output_path
@@ -564,3 +517,189 @@ def color_grade_video(
 ) -> None:
     """Color grade a video to match reference footage (legacy interface)."""
     color_grade_to_match(video_path, reference_path, output_path)
+
+
+# ============================================================================
+# IMAGE-CONDITIONED VEO GENERATION (for scene-matched overlays)
+# ============================================================================
+
+def generate_scene_matched_product_video(
+    product: dict,
+    reference_frame_path: str,
+    scene_context: dict,
+    style: str = "floating",
+    duration: int = 4,
+) -> str:
+    """Generate a product video using a reference frame for scene matching.
+
+    Uses Veo's image-to-video capability to generate product content that
+    matches the visual style of the reference frame from the event footage.
+
+    Args:
+        product: Product dict with title, description, image_url
+        reference_frame_path: Path to frame extracted from event video
+        scene_context: Detailed scene analysis from Gemini
+        style: Placement style (floating, showcase, dynamic, etc.)
+        duration: Duration in seconds
+
+    Returns:
+        Path to generated video file
+    """
+    from services.gemini_service import build_veo_prompt_from_scene_analysis
+
+    client = get_veo_client()
+
+    # Build the rich prompt from scene analysis
+    prompt = build_veo_prompt_from_scene_analysis(
+        scene_analysis=scene_context,
+        product=product,
+        style=style,
+    )
+
+    print(f"[Veo] Generating scene-matched video for {product.get('title')}")
+    print(f"[Veo] Using reference frame: {reference_frame_path}")
+    print(f"[Veo] Prompt preview: {prompt[:300]}...")
+
+    try:
+        # Load reference frame using the SDK's from_file method (requires keyword arg)
+        reference_image = types.Image.from_file(location=reference_frame_path)
+
+        # Try image-to-video generation (Veo 3.1 supports this)
+        # Note: enhance_prompt is not supported for image-conditioned generation
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=prompt,
+            image=reference_image,
+            config=types.GenerateVideosConfig(
+                aspect_ratio="16:9",
+            ),
+        )
+        print("[Veo] Using image-conditioned generation with reference frame")
+
+    except Exception as e:
+        print(f"[Veo] Image-conditioned generation not available: {e}")
+        print("[Veo] Falling back to text-only generation with enhanced prompt")
+
+        # Enhance prompt for text-only generation - emphasize green screen quality
+        enhanced_prompt = f"""{prompt}
+
+CRITICAL FOR TEXT-ONLY GENERATION:
+- The background MUST be solid, uniform, bright green (#00FF00) - this is essential
+- No background variations, shadows, or gradients - pure flat green
+- Product should be the ONLY non-green element in the frame
+- Ensure perfect chroma key extraction will be possible
+- Professional TV commercial quality, 4K sharp"""
+
+        # Fallback to text-only with enhanced prompt
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=enhanced_prompt,
+            config=types.GenerateVideosConfig(
+                aspect_ratio="16:9",
+            ),
+        )
+        print(f"[Veo] Enhanced prompt length: {len(enhanced_prompt)} chars")
+
+    # Poll for completion
+    max_wait = 300
+    wait_time = 0
+    poll_interval = 10
+
+    while not operation.done and wait_time < max_wait:
+        time.sleep(poll_interval)
+        wait_time += poll_interval
+        operation = client.operations.get(operation)
+        print(f"[Veo] Waiting for scene-matched generation... ({wait_time}s)")
+
+    if not operation.done:
+        raise TimeoutError(f"Video generation timed out after {max_wait}s")
+
+    if not operation.response or not operation.response.generated_videos:
+        raise ValueError("No video generated by Veo")
+
+    # Get result
+    generated_video = operation.response.generated_videos[0]
+
+    # Save to temp file using SDK's save() method
+    output_path = os.path.join(
+        tempfile.gettempdir(),
+        f"veo_scene_matched_{int(time.time())}.mp4"
+    )
+
+    # Use the SDK's built-in save method
+    generated_video.video.save(output_path)
+    print(f"[Veo] Scene-matched video saved: {output_path}")
+    return output_path
+
+
+def generate_contextual_product_overlay(
+    product: dict,
+    event_video_path: str,
+    timestamp_sec: float,
+    style: str = "floating",
+    duration: int = 4,
+) -> str:
+    """Full pipeline: analyze scene, get reference frame, generate matched video.
+
+    This is the HIGH-LEVEL function that combines:
+    1. Frame extraction from event video
+    2. Gemini scene analysis for rich context
+    3. Veo generation with reference frame + context
+
+    Args:
+        product: Product dict with title, description, image_url
+        event_video_path: Path to event video file
+        timestamp_sec: Where to extract reference frame (placement time)
+        style: Placement style
+        duration: Duration in seconds
+
+    Returns:
+        Path to generated product overlay video
+    """
+    from services.gemini_service import (
+        analyze_scene_for_veo_context,
+        get_reference_frame_for_veo,
+    )
+
+    print(f"[Veo] Generating contextual overlay for {product.get('title')} at {timestamp_sec}s")
+
+    # Step 1: Analyze scene with Gemini (using multiple frames)
+    scene_context = analyze_scene_for_veo_context(
+        video_path=event_video_path,
+        timestamp_sec=timestamp_sec,
+        num_frames=3,  # More frames = better analysis
+    )
+
+    # Step 2: Get single reference frame for Veo
+    frame_path, _ = get_reference_frame_for_veo(
+        video_path=event_video_path,
+        timestamp_sec=timestamp_sec,
+    )
+
+    if not frame_path:
+        print("[Veo] Could not extract reference frame, using standard generation")
+        return generate_native_ad(
+            product=product,
+            event_type="sports",
+            transition_style="fade",
+            duration=duration,
+        )
+
+    try:
+        # Step 3: Generate scene-matched video
+        result = generate_scene_matched_product_video(
+            product=product,
+            reference_frame_path=frame_path,
+            scene_context=scene_context,
+            style=style,
+            duration=duration,
+        )
+
+        return result
+
+    finally:
+        # Cleanup reference frame
+        try:
+            os.remove(frame_path)
+        except OSError:
+            pass

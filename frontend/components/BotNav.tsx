@@ -40,7 +40,7 @@ export default function BotNav() {
           bottom: 0,
           left: 0,
           right: 0,
-          height: '150px',
+          height: '105px',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'flex-end',
@@ -58,7 +58,7 @@ export default function BotNav() {
             bottom: 0,
             left: '-5%',
             width: '110%',
-            height: '160px',
+            height: '112px',
           }}
         >
           {/* Main organic blob - solid fill, no gradients */}
@@ -73,29 +73,29 @@ export default function BotNav() {
           style={{
             position: 'relative',
             zIndex: 10,
-            paddingBottom: '20px',
+            paddingBottom: '14px',
             pointerEvents: 'auto',
           }}
         >
           <BottomNavigation
               showLabels
               value={value}
-              onChange={(event, newValue) => {
+              onChange={(_, newValue) => {
                 handleNavigation(newValue);
               }}
               sx={{
-                height: "70px",
+                height: "49px",
                 backgroundColor: 'transparent',
                 '& .MuiBottomNavigationAction-root': {
                   color: 'rgba(255, 255, 255, 0.7)',
-                  minWidth: '150px',
-                  padding: '0 24px',
-                  borderRadius: '16px',
+                  minWidth: '105px',
+                  padding: '0 17px',
+                  borderRadius: '11px',
                   transition: 'all 0.2s ease',
                   '&:hover': {
                       backgroundColor: 'rgba(255, 255, 255, 0.1)',
                     color: '#FAFAFA',
-                    transform: 'translateY(-4px)',
+                    transform: 'translateY(-3px)',
                   },
                 },
                 '& .Mui-selected': {
@@ -104,15 +104,15 @@ export default function BotNav() {
                 '& .MuiBottomNavigationAction-label': {
                   color: '#FAFAFA !important',
                   fontWeight: 500,
-                  fontSize: '0.875rem',
-                  marginTop: '4px',
+                  fontSize: '0.6rem',
+                  marginTop: '3px',
                   opacity: 1,
                 },
               }}
           >
-            <BottomNavigationAction label="My Events" icon={<AccountIcon color="info" style={{fontSize: "6vh"}}/>} />
-            <BottomNavigationAction label="Create Clips" icon={<AddIcon color="info" style={{fontSize: "6vh"}}/>} />
-            <BottomNavigationAction label="Partners" icon={<PartnerIcon color="info" style={{fontSize: "6vh"}}/>}/>
+            <BottomNavigationAction label="My Events" icon={<AccountIcon color="info" style={{fontSize: "4.2vh"}}/>} />
+            <BottomNavigationAction label="Create Clips" icon={<AddIcon color="info" style={{fontSize: "4.2vh"}}/>} />
+            <BottomNavigationAction label="Partners" icon={<PartnerIcon color="info" style={{fontSize: "4.2vh"}}/>}/>
           </BottomNavigation>
         </div>
       </div>

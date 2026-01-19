@@ -10,7 +10,7 @@ import BotNav from "@/components/BotNav";
 const customTheme = createTheme({
   typography: {
     h1: {
-      fontSize: 'clamp(2rem, 5.5vw, 4rem)',
+      fontSize: 'clamp(1.8rem, 5.3vw, 3.8rem)',
       fontWeight: 700,
     },
     h2: {
@@ -102,7 +102,7 @@ export default function LayoutClient({
     >
       <QueryClientProvider client={queryClient}>
         {!isHomePage && (
-            <div className="absolute z-20" style={{left: '3vw', top: '5vh', width: '32vw'}}>
+            <div className="absolute z-20" style={{left: '3vw', top: '5vh', width: '16vw'}}>
               <img src="/Anchor%20FInal.svg" alt="Anchor logo" className="w-full h-auto object-contain"/>
             </div>
         )}
